@@ -58,5 +58,25 @@ def init_db():
         )
     """)
 
+    # =========================
+    # Log de requisições (métricas técnicas)
+    # =========================
+    # Registra cada consulta feita via services.cache.buscar_ativo, seja ela
+    # servida pelo cache local ou pela API da brapi.dev. Usado para calcular
+    # taxa de cache hit, tempo médio de resposta da API e taxa de erro —
+    # métricas de desempenho e qualidade de dados apresentadas no TCC.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS log_requisicoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT NOT NULL,
+            periodo TEXT NOT NULL,
+            veio_do_cache INTEGER NOT NULL,
+            sucesso INTEGER NOT NULL,
+            tempo_resposta_ms REAL,
+            erro TEXT,
+            registrado_em TEXT NOT NULL
+        )
+    """)
+
     conn.commit()
     conn.close()

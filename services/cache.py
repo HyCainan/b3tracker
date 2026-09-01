@@ -1,4 +1,5 @@
 import json
+import time
 from datetime import datetime, timedelta
 
 import requests
@@ -40,11 +41,44 @@ def _chamar_api(ticker, periodo, token):
     return None
 
 
+def _registrar_log(ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro=None):
+    """
+    Registra uma linha de métricas na tabela log_requisicoes: se a consulta
+    veio do cache ou da API, se teve sucesso, quanto tempo levou e o erro
+    (se houver). Usado pela página de Métricas para calcular indicadores
+    de desempenho e qualidade de dados.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO log_requisicoes
+            (ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro, registrado_em)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            ticker,
+            periodo,
+            1 if veio_do_cache else 0,
+            1 if sucesso else 0,
+            tempo_resposta_ms,
+            erro,
+            datetime.utcnow().isoformat(),
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
     """
     Busca a cotação de um ticker respeitando o cache local com TTL.
     Retorna (dados, veio_do_cache).
     A chave de cache combina ticker + período pois o histórico varia por período.
+
+    Cada chamada gera automaticamente uma linha em log_requisicoes com o
+    tempo de resposta, se veio do cache e se teve sucesso — base para as
+    métricas técnicas do projeto.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -59,9 +93,29 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
         coletado_em = datetime.fromisoformat(row["coletado_em"])
         if datetime.utcnow() - coletado_em < timedelta(minutes=ttl_minutos):
             conn.close()
+            _registrar_log(
+                ticker, periodo, veio_do_cache=True, sucesso=True, tempo_resposta_ms=0.0
+            )
             return json.loads(row["dados_json"]), True
 
-    dados = _chamar_api(ticker, periodo, token)
+    inicio = time.perf_counter()
+
+    try:
+        dados = _chamar_api(ticker, periodo, token)
+    except Exception as e:
+        tempo_resposta_ms = (time.perf_counter() - inicio) * 1000
+        conn.close()
+        _registrar_log(
+            ticker,
+            periodo,
+            veio_do_cache=False,
+            sucesso=False,
+            tempo_resposta_ms=tempo_resposta_ms,
+            erro=str(e),
+        )
+        raise
+
+    tempo_resposta_ms = (time.perf_counter() - inicio) * 1000
 
     if dados is not None:
         cur.execute(
@@ -77,4 +131,14 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
         conn.commit()
 
     conn.close()
+
+    _registrar_log(
+        ticker,
+        periodo,
+        veio_do_cache=False,
+        sucesso=dados is not None,
+        tempo_resposta_ms=tempo_resposta_ms,
+        erro=None if dados is not None else "Nenhum resultado retornado pela API",
+    )
+
     return dados, False
