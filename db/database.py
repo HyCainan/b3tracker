@@ -39,13 +39,22 @@ def init_db():
         )
     """)
 
+    # =========================
+    # Operações (compra/venda) — substitui o antigo carteira_ativos
+    # =========================
+    # Cada linha representa uma operação individual de compra ou venda.
+    # Quantidade, preço médio e P/L são derivados a partir daqui
+    # (services.carteira.calcular_posicoes), nunca armazenados prontos.
     cur.execute("""
-        CREATE TABLE IF NOT EXISTS carteira_ativos (
+        CREATE TABLE IF NOT EXISTS operacoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             carteira_id INTEGER NOT NULL,
             ticker TEXT NOT NULL,
-            valor_alocado REAL NOT NULL,
-            adicionado_em TEXT NOT NULL,
+            tipo TEXT NOT NULL CHECK (tipo IN ('compra', 'venda')),
+            quantidade REAL NOT NULL,
+            preco REAL NOT NULL,
+            data_operacao TEXT NOT NULL,
+            criado_em TEXT NOT NULL,
             FOREIGN KEY (carteira_id) REFERENCES carteiras(id) ON DELETE CASCADE
         )
     """)
@@ -61,10 +70,6 @@ def init_db():
     # =========================
     # Log de requisições (métricas técnicas)
     # =========================
-    # Registra cada consulta feita via services.cache.buscar_ativo, seja ela
-    # servida pelo cache local ou pela API da brapi.dev. Usado para calcular
-    # taxa de cache hit, tempo médio de resposta da API e taxa de erro —
-    # métricas de desempenho e qualidade de dados apresentadas no TCC.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS log_requisicoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
