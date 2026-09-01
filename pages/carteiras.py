@@ -269,43 +269,102 @@ def render_carteira(usuario_id, token):
 
     st.subheader("Registrar operação")
 
-    with st.form("form_operacao"):
-        c1, c2, c3, c4 = st.columns([1, 1.5, 1, 1.5])
+    c1, c2 = st.columns([1, 1.5])
 
-        with c1:
-            tipo = st.selectbox("Tipo", options=["compra", "venda"])
+    with c1:
+        tipo = st.selectbox("Tipo", options=["compra", "venda"], key="op_tipo")
 
-        with c2:
-            ticker = st.selectbox("Ativo", options=TICKERS_DISPONIVEIS)
+    with c2:
+        ticker = st.selectbox("Ativo", options=TICKERS_DISPONIVEIS, key="op_ticker")
 
-        with c3:
-            quantidade = st.number_input(
-                "Quantidade", min_value=1.0, value=10.0, step=1.0
-            )
+    forma = st.selectbox(
+        "Forma de compra" if tipo == "compra" else "Forma de venda",
+        options=["Por valor", "Por quantidade"],
+        key="op_forma",
+    )
 
-        with c4:
-            preco = st.number_input(
-                "Preço (R$)", min_value=0.01, value=10.0, step=0.5, format="%.2f"
-            )
-
-        data_operacao = st.date_input("Data da operação", value=date.today())
-
-        enviar = st.form_submit_button("Registrar")
-
-    if enviar:
+    # Busca a cotação atual do ativo escolhido para permitir o cálculo
+    # em tempo real (tanto pra "por valor" quanto pra exibir o valor da
+    # operação em "por quantidade").
+    preco_atual = None
+    if token:
         try:
-            registrar_operacao(
-                carteira_id,
-                ticker,
-                tipo,
-                quantidade,
-                preco,
-                data_operacao.isoformat(),
+            stock, _ = buscar_ativo(ticker, "1mo", token)
+            if stock:
+                preco_atual = stock.get("regularMarketPrice")
+        except Exception:
+            preco_atual = None
+
+    if preco_atual is None:
+        st.warning(
+            "Não foi possível obter a cotação atual deste ativo agora. "
+            "Tente novamente em instantes."
+        )
+    else:
+        quantidade = None
+        valor_operacao = None
+
+        if forma == "Por valor":
+            valor_investir = st.number_input(
+                "Valor a investir (R$)" if tipo == "compra" else "Valor a vender (R$)",
+                min_value=0.01,
+                value=100.0,
+                step=50.0,
+                format="%.2f",
+                key="op_valor_investir",
             )
-            st.success(f"{tipo.capitalize()} de {quantidade:g} {ticker} registrada.")
-            st.rerun()
-        except ValueError as e:
-            st.error(str(e))
+
+            quantidade = float(int(valor_investir // preco_atual))
+            valor_operacao = quantidade * preco_atual
+
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Cotação atual", f"R$ {preco_atual:.2f}")
+            m2.metric("Quantidade estimada", f"{quantidade:g} ações")
+            m3.metric("Valor da operação", f"R$ {valor_operacao:.2f}")
+
+            if quantidade <= 0:
+                st.warning(
+                    "O valor informado não é suficiente para "
+                    f"{'comprar' if tipo == 'compra' else 'vender'} nem 1 ação."
+                )
+
+        else:  # Por quantidade
+            quantidade = st.number_input(
+                "Quantidade",
+                min_value=1.0,
+                value=10.0,
+                step=1.0,
+                format="%.0f",
+                key="op_quantidade",
+            )
+
+            valor_operacao = quantidade * preco_atual
+
+            m1, m2 = st.columns(2)
+            m1.metric("Cotação atual", f"R$ {preco_atual:.2f}")
+            m2.metric("Valor da operação", f"R$ {valor_operacao:.2f}")
+
+        data_operacao = st.date_input(
+            "Data da operação", value=date.today(), key="op_data"
+        )
+
+        if st.button("Registrar", disabled=(not quantidade or quantidade <= 0)):
+            try:
+                registrar_operacao(
+                    carteira_id,
+                    ticker,
+                    tipo,
+                    quantidade,
+                    preco_atual,
+                    data_operacao.isoformat(),
+                )
+                st.success(
+                    f"{tipo.capitalize()} de {quantidade:g} {ticker} registrada "
+                    f"(R$ {valor_operacao:.2f})."
+                )
+                st.rerun()
+            except ValueError as e:
+                st.error(str(e))
 
     # =========================
     # Histórico de operações
