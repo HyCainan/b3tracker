@@ -75,8 +75,8 @@ def render_perfil(usuario_id):
 
     st.subheader("Editar dados")
 
-    aba_dados, aba_senha, aba_conta = st.tabs(
-        ["Dados pessoais", "Alterar senha", "Excluir conta"]
+    aba_dados, aba_senha, aba_carteiras, aba_conta = st.tabs(
+        ["Dados pessoais", "Alterar senha", "Carteiras", "Excluir conta"]
     )
 
     # --- Dados pessoais ---
@@ -128,6 +128,42 @@ def render_perfil(usuario_id):
                     st.success("Senha alterada com sucesso!")
                 else:
                     st.error(resultado["erro"])
+    # --- Carteiras ---
+    with aba_carteiras:
+        carteiras = listar_carteiras(usuario_id)
+
+        if not carteiras:
+            st.caption("Você ainda não tem nenhuma carteira criada.")
+        else:
+            for c in carteiras:
+                with st.form(f"form_renomear_{c['id']}"):
+                    col_nome, col_btn = st.columns([3, 1])
+
+                    with col_nome:
+                        novo_nome_carteira = st.text_input(
+                            "Nome da carteira",
+                            value=c["nome"],
+                            key=f"nome_carteira_{c['id']}",
+                            label_visibility="collapsed",
+                        )
+
+                    with col_btn:
+                        salvar_carteira = st.form_submit_button(
+                            "Salvar", use_container_width=True
+                        )
+
+                if salvar_carteira:
+                    if novo_nome_carteira.strip() == c["nome"]:
+                        st.caption("Nenhuma alteração.")
+                    else:
+                        resultado = renomear_carteira(c["id"], novo_nome_carteira)
+                        if resultado["ok"]:
+                            st.success(
+                                f"Carteira renomeada para '{novo_nome_carteira.strip()}'."
+                            )
+                            st.rerun()
+                        else:
+                            st.error(resultado["erro"])
 
     # --- Excluir conta ---
     with aba_conta:

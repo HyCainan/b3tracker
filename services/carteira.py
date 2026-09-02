@@ -32,6 +32,26 @@ def listar_carteiras(usuario_id):
     return rows
 
 
+def renomear_carteira(carteira_id, novo_nome):
+    novo_nome = novo_nome.strip()
+
+    if not novo_nome:
+        return {"ok": False, "erro": "O nome não pode ficar vazio."}
+
+    conn = get_connection()
+    cur = conn.cursor()
+    try:
+        cur.execute(
+            "UPDATE carteiras SET nome = ? WHERE id = ?", (novo_nome, carteira_id)
+        )
+        conn.commit()
+        return {"ok": True}
+    except Exception as e:
+        return {"ok": False, "erro": f"Erro ao renomear carteira: {e}"}
+    finally:
+        conn.close()
+
+
 def excluir_carteira(carteira_id):
     conn = get_connection()
     cur = conn.cursor()

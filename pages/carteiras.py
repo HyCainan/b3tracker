@@ -14,6 +14,7 @@ from services.carteira import (
     listar_operacoes,
     registrar_operacao,
     remover_operacao,
+    renomear_carteira,
 )
 from services.renda_fixa import (
     calcular_posicoes as calcular_posicoes_rf,
@@ -467,9 +468,7 @@ def render_carteira(usuario_id, token):
             key="rf_valor",
         )
 
-    data_aporte = st.date_input(
-        "Data do aporte", value=date.today(), key="rf_data"
-    )
+    data_aporte = st.date_input("Data do aporte", value=date.today(), key="rf_data")
 
     if st.button("Registrar aporte"):
         try:
