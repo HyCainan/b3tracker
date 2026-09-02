@@ -11,6 +11,8 @@ from services.usuario import (
     excluir_usuario,
 )
 
+from services.carteira import calcular_posicoes, listar_carteiras, renomear_carteira
+
 
 def formatar_data(iso_str):
     try:

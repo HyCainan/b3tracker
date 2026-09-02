@@ -14,7 +14,6 @@ from services.carteira import (
     listar_operacoes,
     registrar_operacao,
     remover_operacao,
-    renomear_carteira,
 )
 from services.renda_fixa import (
     calcular_posicoes as calcular_posicoes_rf,
