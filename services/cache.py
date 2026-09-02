@@ -41,7 +41,9 @@ def _chamar_api(ticker, periodo, token):
     return None
 
 
-def _registrar_log(ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro=None):
+def _registrar_log(
+    ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro=None
+):
     """
     Registra uma linha de métricas na tabela log_requisicoes: se a consulta
     veio do cache ou da API, se teve sucesso, quanto tempo levou e o erro
@@ -78,8 +80,12 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
 
     Cada chamada gera automaticamente uma linha em log_requisicoes com o
     tempo de resposta, se veio do cache e se teve sucesso — base para as
-    métricas técnicas do projeto.
+    métricas técnicas do projeto. O tempo de resposta é sempre medido de
+    verdade (tanto para cache quanto para API), para permitir a comparação
+    honesta de desempenho entre os dois caminhos.
     """
+    t_inicio = time.perf_counter()
+
     conn = get_connection()
     cur = conn.cursor()
 
@@ -92,18 +98,27 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
     if row is not None:
         coletado_em = datetime.fromisoformat(row["coletado_em"])
         if datetime.utcnow() - coletado_em < timedelta(minutes=ttl_minutos):
+            # Inclui a desserialização do JSON na medição: é o custo real
+            # de "resolver" a requisição pelo cache, ponto de comparação
+            # justo contra o tempo de uma chamada real à API.
+            dados = json.loads(row["dados_json"])
             conn.close()
+            tempo_resposta_ms = (time.perf_counter() - t_inicio) * 1000
             _registrar_log(
-                ticker, periodo, veio_do_cache=True, sucesso=True, tempo_resposta_ms=0.0
+                ticker,
+                periodo,
+                veio_do_cache=True,
+                sucesso=True,
+                tempo_resposta_ms=tempo_resposta_ms,
             )
-            return json.loads(row["dados_json"]), True
+            return dados, True
 
-    inicio = time.perf_counter()
+    inicio_api = time.perf_counter()
 
     try:
         dados = _chamar_api(ticker, periodo, token)
     except Exception as e:
-        tempo_resposta_ms = (time.perf_counter() - inicio) * 1000
+        tempo_resposta_ms = (time.perf_counter() - inicio_api) * 1000
         conn.close()
         _registrar_log(
             ticker,
@@ -115,7 +130,7 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
         )
         raise
 
-    tempo_resposta_ms = (time.perf_counter() - inicio) * 1000
+    tempo_resposta_ms = (time.perf_counter() - inicio_api) * 1000
 
     if dados is not None:
         cur.execute(

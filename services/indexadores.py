@@ -21,7 +21,9 @@ def _chamar_bcb(codigo_serie, data_inicial, data_final):
     return response.json()
 
 
-def _registrar_log(indexador, referencia, veio_do_cache, sucesso, tempo_resposta_ms, erro=None):
+def _registrar_log(
+    indexador, referencia, veio_do_cache, sucesso, tempo_resposta_ms, erro=None
+):
     """
     Reaproveita a tabela log_requisicoes para que as chamadas ao CDI/Selic
     também apareçam nas Métricas técnicas do TCC. O "ticker" é registrado
@@ -49,7 +51,9 @@ def _registrar_log(indexador, referencia, veio_do_cache, sucesso, tempo_resposta
     conn.close()
 
 
-def rendimento_desde(indexador, data_inicio_iso, percentual_indexador=100.0, ttl_minutos=15):
+def rendimento_desde(
+    indexador, data_inicio_iso, percentual_indexador=100.0, ttl_minutos=15
+):
     """
     Calcula o rendimento percentual acumulado do indexador (CDI ou SELIC)
     entre `data_inicio_iso` (formato "AAAA-MM-DD", data do aporte) e hoje.
@@ -58,7 +62,13 @@ def rendimento_desde(indexador, data_inicio_iso, percentual_indexador=100.0, ttl
     sobre o fator acumulado do período (fator ** (percentual / 100)) —
     aproximação padrão de mercado para prazos de meses/anos, suficiente
     para os fins de estimativa do TCC.
+
+    O tempo de resposta é medido de verdade tanto no caminho de cache
+    quanto no de API real, para alimentar as métricas de comparação de
+    desempenho (cache vs. API) do TCC.
     """
+    t_inicio = time.perf_counter()
+
     data_inicio = datetime.fromisoformat(data_inicio_iso).date()
     hoje = date.today()
 
@@ -78,9 +88,10 @@ def rendimento_desde(indexador, data_inicio_iso, percentual_indexador=100.0, ttl
     if row is not None:
         coletado_em = datetime.fromisoformat(row["coletado_em"])
         if datetime.now(timezone.utc) - coletado_em < timedelta(minutes=ttl_minutos):
-            conn.close()
-            _registrar_log(indexador, chave, True, True, 0.0)
             fator = row["valor_acumulado"]
+            conn.close()
+            tempo_resposta_ms = (time.perf_counter() - t_inicio) * 1000
+            _registrar_log(indexador, chave, True, True, tempo_resposta_ms)
             return (fator ** (percentual_indexador / 100) - 1) * 100
 
     codigo_serie = CODIGOS_SGS.get(indexador)
