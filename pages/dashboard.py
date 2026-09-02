@@ -60,9 +60,6 @@ def render_dashboard(token):
     if not selecionados:
         st.info("Selecione ao menos um ativo para ver as cotações.")
 
-        st.session_state.pop("resultados", None)
-        st.session_state.pop("periodo_label", None)
-
         return
 
     periodo = PERIODOS[periodo_label]
@@ -94,10 +91,6 @@ def render_dashboard(token):
     if not resultados:
         st.error("Nenhum dado encontrado.")
         return
-
-    # Guarda os dados para o simulador
-    st.session_state["resultados"] = resultados
-    st.session_state["periodo_label"] = periodo_label
 
     if cache_hits:
         st.caption(

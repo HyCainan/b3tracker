@@ -40,7 +40,7 @@ def init_db():
     """)
 
     # =========================
-    # Operações (compra/venda) — substitui o antigo carteira_ativos
+    # Operações (compra/venda) — ações da B3
     # =========================
     # Cada linha representa uma operação individual de compra ou venda.
     # Quantidade, preço médio e P/L são derivados a partir daqui
@@ -59,6 +59,39 @@ def init_db():
         )
     """)
 
+    # =========================
+    # Aportes em Renda Fixa (CDI/Selic)
+    # =========================
+    # Cada linha representa um aporte em um indexador (CDI ou SELIC) a um
+    # certo percentual contratado (ex.: 100%, 110%). O rendimento é
+    # calculado a partir da data do aporte até hoje
+    # (services.renda_fixa.calcular_posicoes), usando as séries diárias
+    # do Banco Central. Não há suporte a resgate parcial nesta versão —
+    # cada aporte é uma posição independente até ser removido.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS aportes_renda_fixa (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            carteira_id INTEGER NOT NULL,
+            indexador TEXT NOT NULL CHECK (indexador IN ('CDI', 'SELIC')),
+            percentual_indexador REAL NOT NULL,
+            valor REAL NOT NULL,
+            data_operacao TEXT NOT NULL,
+            criado_em TEXT NOT NULL,
+            FOREIGN KEY (carteira_id) REFERENCES carteiras(id) ON DELETE CASCADE
+        )
+    """)
+
+    # =========================
+    # Cache de indexadores (CDI/Selic) — séries diárias do BCB
+    # =========================
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS cache_indexadores (
+            chave TEXT PRIMARY KEY,
+            valor_acumulado REAL NOT NULL,
+            coletado_em TEXT NOT NULL
+        )
+    """)
+
     cur.execute("""
         CREATE TABLE IF NOT EXISTS cache_cotacoes (
             ticker TEXT PRIMARY KEY,
@@ -70,6 +103,11 @@ def init_db():
     # =========================
     # Log de requisições (métricas técnicas)
     # =========================
+    # Registra cada consulta feita via services.cache.buscar_ativo e
+    # services.indexadores.rendimento_desde, seja ela servida pelo cache
+    # local ou pela API externa (brapi.dev ou BCB/SGS). Usado para
+    # calcular taxa de cache hit, tempo médio de resposta e taxa de erro —
+    # métricas de desempenho e qualidade de dados apresentadas no TCC.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS log_requisicoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

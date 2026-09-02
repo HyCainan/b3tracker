@@ -5,7 +5,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
 
-from services.cache import PERIODOS, TICKERS_DISPONIVEIS, buscar_ativo
+from services.cache import TICKERS_DISPONIVEIS, buscar_ativo
 from services.carteira import (
     calcular_posicoes,
     criar_carteira,
@@ -15,27 +15,33 @@ from services.carteira import (
     registrar_operacao,
     remover_operacao,
 )
+from services.renda_fixa import (
+    calcular_posicoes as calcular_posicoes_rf,
+    listar_aportes,
+    registrar_aporte,
+    remover_aporte,
+)
 
 load_dotenv()
 BRAPI_TOKEN = os.getenv("BRAPI_TOKEN")
 
 
 # =========================
-# Cálculo das métricas de performance
+# Cálculo das métricas de performance (ações)
 # =========================
 
 
-def calcular_metricas_carteira(posicoes, token):
+def calcular_metricas_acoes(posicoes, token):
     """
     Para cada posição (quantidade + preço médio, vindos das operações
     reais), busca o preço atual de mercado e calcula o P/L com base no
-    custo efetivo — não mais numa aproximação por variação de período.
+    custo efetivo.
     """
     detalhes = []
     total_investido = 0.0
     total_atual = 0.0
 
-    with st.spinner("Calculando performance da carteira..."):
+    with st.spinner("Calculando performance das ações..."):
         for pos in posicoes:
             ticker = pos["ticker"]
             custo_total = pos["custo_total"]
@@ -102,74 +108,117 @@ def calcular_metricas_carteira(posicoes, token):
 
 
 # =========================
-# Painel de performance
+# Painel de performance (ações + renda fixa)
 # =========================
 
 
 def render_performance_carteira(carteira_id, token):
     st.subheader("📈 Performance da carteira")
 
-    posicoes = calcular_posicoes(carteira_id)
+    posicoes_acoes = calcular_posicoes(carteira_id)
+    posicoes_rf = calcular_posicoes_rf(carteira_id)
 
-    if not posicoes:
-        st.caption("Nenhuma posição em aberto. Registre uma compra para começar.")
+    if not posicoes_acoes and not posicoes_rf:
+        st.caption(
+            "Nenhuma posição em aberto. Registre uma compra ou um aporte para começar."
+        )
         return
 
-    metricas = calcular_metricas_carteira(posicoes, token)
-    detalhes = metricas["detalhes"]
+    linhas = []
+    total_investido = 0.0
+    total_atual = 0.0
 
-    if any(d["erro"] for d in detalhes):
-        tickers_erro = ", ".join(d["ticker"] for d in detalhes if d["erro"])
+    if posicoes_acoes:
+        metricas_acoes = calcular_metricas_acoes(posicoes_acoes, token)
+
+        for d in metricas_acoes["detalhes"]:
+            linhas.append(
+                {
+                    "rotulo": d["ticker"],
+                    "categoria": "Ação",
+                    "valor_investido": d["custo_total"],
+                    "valor_atual": d["valor_atual"],
+                    "variacao_pct": d["variacao_pct"],
+                    "erro": d["erro"],
+                }
+            )
+
+        total_investido += metricas_acoes["total_investido"]
+        total_atual += metricas_acoes["total_atual"]
+
+    for d in posicoes_rf:
+        linhas.append(
+            {
+                "rotulo": d["rotulo"],
+                "categoria": "Renda Fixa",
+                "valor_investido": d["valor_aportado"],
+                "valor_atual": d["valor_atual"],
+                "variacao_pct": d["variacao_pct"],
+                "erro": d["erro"],
+            }
+        )
+        total_investido += d["valor_aportado"]
+        total_atual += d["valor_atual"]
+
+    ganho_total = total_atual - total_investido
+    variacao_total_pct = (
+        (ganho_total / total_investido * 100) if total_investido else 0.0
+    )
+
+    if any(l["erro"] for l in linhas):
+        rotulos_erro = ", ".join(l["rotulo"] for l in linhas if l["erro"])
         st.warning(
-            f"Não foi possível obter a cotação de: {tickers_erro}. "
-            "Essas posições foram consideradas ao preço médio (sem variação)."
+            f"Não foi possível obter a cotação/rendimento de: {rotulos_erro}. "
+            "Essas posições foram consideradas sem variação."
         )
 
     col1, col2, col3 = st.columns(3)
 
-    cor_total = "normal" if metricas["ganho_total"] >= 0 else "inverse"
-    sinal_total = "+" if metricas["ganho_total"] >= 0 else ""
+    cor_total = "normal" if ganho_total >= 0 else "inverse"
+    sinal_total = "+" if ganho_total >= 0 else ""
 
-    col1.metric("Valor investido (custo)", f"R$ {metricas['total_investido']:.2f}")
+    col1.metric("Valor investido", f"R$ {total_investido:.2f}")
 
     col2.metric(
         "Valor atual",
-        f"R$ {metricas['total_atual']:.2f}",
+        f"R$ {total_atual:.2f}",
         delta=(
-            f"{sinal_total}R$ {metricas['ganho_total']:.2f} "
-            f"({sinal_total}{metricas['variacao_total_pct']:.2f}%)"
+            f"{sinal_total}R$ {ganho_total:.2f} ({sinal_total}{variacao_total_pct:.2f}%)"
         ),
         delta_color=cor_total,
     )
 
-    validos = [d for d in detalhes if not d["erro"]]
+    validos = [l for l in linhas if not l["erro"]]
 
     if validos:
-        melhor = max(validos, key=lambda d: d["variacao_pct"])
-        pior = min(validos, key=lambda d: d["variacao_pct"])
+        melhor = max(validos, key=lambda l: l["variacao_pct"])
+        pior = min(validos, key=lambda l: l["variacao_pct"])
 
         with col3:
             st.caption("Destaques")
             st.write(
-                f"🟢 Maior alta: **{melhor['ticker']}** ({melhor['variacao_pct']:+.2f}%)"
+                f"🟢 Maior alta: **{melhor['rotulo']}** ({melhor['variacao_pct']:+.2f}%)"
             )
             st.write(
-                f"🔴 Maior queda: **{pior['ticker']}** ({pior['variacao_pct']:+.2f}%)"
+                f"🔴 Maior queda: **{pior['rotulo']}** ({pior['variacao_pct']:+.2f}%)"
             )
 
-    st.caption("P/L calculado sobre o preço médio real das operações registradas.")
+    st.caption(
+        "P/L de ações calculado sobre o preço médio real das operações; "
+        "renda fixa calculada sobre o rendimento acumulado do indexador desde o aporte."
+    )
 
     # Gráfico comparativo
     if validos:
-        ordenados = sorted(validos, key=lambda d: d["variacao_pct"], reverse=True)
-        tickers_chart = [d["ticker"] for d in ordenados]
-        variacoes_chart = [d["variacao_pct"] for d in ordenados]
+        ordenados = sorted(validos, key=lambda l: l["variacao_pct"], reverse=True)
+        rotulos_chart = [l["rotulo"] for l in ordenados]
+        variacoes_chart = [l["variacao_pct"] for l in ordenados]
         cores_chart = ["#2ecc71" if v >= 0 else "#e74c3c" for v in variacoes_chart]
 
         fig = go.Figure(
             go.Bar(
                 x=variacoes_chart,
-                y=tickers_chart,
+                y=rotulos_chart,
                 orientation="h",
                 marker_color=cores_chart,
                 text=[f"{v:+.2f}%" for v in variacoes_chart],
@@ -180,7 +229,7 @@ def render_performance_carteira(carteira_id, token):
         fig.update_layout(
             xaxis_title="Variação (%)",
             yaxis_title="",
-            height=120 + 40 * len(tickers_chart),
+            height=120 + 40 * len(rotulos_chart),
             margin=dict(t=10, b=30, l=10, r=10),
             showlegend=False,
         )
@@ -189,26 +238,22 @@ def render_performance_carteira(carteira_id, token):
     # Tabela detalhada
     st.caption("Posições em aberto")
 
-    for d in detalhes:
-        cols = st.columns([1.2, 1, 1.3, 1.3, 1.6, 1.6])
+    for l in linhas:
+        cols = st.columns([1.6, 1.6, 1.4, 1.4])
 
-        cols[0].write(f"**{d['ticker']}**")
-        cols[1].write(f"{d['quantidade']:g} un.")
-        cols[2].write(f"PM: R$ {d['preco_medio']:.2f}")
+        cols[0].write(f"**{l['rotulo']}**")
+        cols[0].caption(l["categoria"])
 
-        if d["erro"]:
+        cols[1].write(f"Investido: R$ {l['valor_investido']:.2f}")
+
+        if l["erro"]:
+            cols[2].write("Sem dados")
             cols[3].write("—")
-            cols[4].write("Sem dados")
-            cols[5].write("—")
         else:
-            cols[3].write(f"Atual: R$ {d['preco_atual']:.2f}")
-
-            sinal = "+" if d["variacao_pct"] >= 0 else ""
-            cor_texto = "green" if d["variacao_pct"] >= 0 else "red"
-            cols[4].markdown(
-                f":{cor_texto}[{sinal}R$ {d['ganho']:.2f} ({sinal}{d['variacao_pct']:.2f}%)]"
-            )
-            cols[5].caption(f"Valor atual: R$ {d['valor_atual']:.2f}")
+            sinal = "+" if l["variacao_pct"] >= 0 else ""
+            cor_texto = "green" if l["variacao_pct"] >= 0 else "red"
+            cols[2].markdown(f":{cor_texto}[{sinal}{l['variacao_pct']:.2f}%]")
+            cols[3].caption(f"Valor atual: R$ {l['valor_atual']:.2f}")
 
     st.divider()
 
@@ -264,10 +309,10 @@ def render_carteira(usuario_id, token):
         st.warning("Token da BRAPI não encontrado. Verifique o arquivo .env.")
 
     # =========================
-    # Registrar operação
+    # Registrar operação (ações)
     # =========================
 
-    st.subheader("Registrar operação")
+    st.subheader("Registrar operação (Ação B3)")
 
     c1, c2 = st.columns([1, 1.5])
 
@@ -367,30 +412,101 @@ def render_carteira(usuario_id, token):
                 st.error(str(e))
 
     # =========================
-    # Histórico de operações
+    # Histórico de operações (ações)
     # =========================
 
     operacoes = listar_operacoes(carteira_id)
 
-    if not operacoes:
-        st.caption("Nenhuma operação registrada ainda.")
-        return
+    if operacoes:
+        st.subheader("Histórico de operações (Ações)")
 
-    st.subheader("Histórico de operações")
+        for op in operacoes:
+            cols = st.columns([1, 2, 1.5, 1.5, 1.5, 1])
 
-    for op in operacoes:
-        cols = st.columns([1, 2, 1.5, 1.5, 1.5, 1])
+            emoji = "🟢" if op["tipo"] == "compra" else "🔴"
+            cols[0].write(emoji)
+            cols[1].write(op["ticker"])
+            cols[2].write(f"{op['quantidade']:g} un.")
+            cols[3].write(f"R$ {op['preco']:.2f}")
+            cols[4].write(op["data_operacao"][:10])
 
-        emoji = "🟢" if op["tipo"] == "compra" else "🔴"
-        cols[0].write(emoji)
-        cols[1].write(op["ticker"])
-        cols[2].write(f"{op['quantidade']:g} un.")
-        cols[3].write(f"R$ {op['preco']:.2f}")
-        cols[4].write(op["data_operacao"][:10])
+            if cols[5].button("Remover", key=f"rm_op_{op['id']}"):
+                remover_operacao(op["id"])
+                st.rerun()
 
-        if cols[5].button("Remover", key=f"rm_op_{op['id']}"):
-            remover_operacao(op["id"])
+    st.divider()
+
+    # =========================
+    # Registrar aporte (Renda Fixa: CDI/Selic)
+    # =========================
+
+    st.subheader("Registrar aporte em Renda Fixa (CDI/Selic)")
+
+    rf1, rf2, rf3 = st.columns([1, 1, 1.5])
+
+    with rf1:
+        indexador_sel = st.selectbox(
+            "Indexador", options=["CDI", "SELIC"], key="rf_indexador"
+        )
+
+    with rf2:
+        percentual_sel = st.number_input(
+            "% do indexador",
+            min_value=1.0,
+            value=100.0,
+            step=5.0,
+            key="rf_percentual",
+        )
+
+    with rf3:
+        valor_sel = st.number_input(
+            "Valor aportado (R$)",
+            min_value=1.0,
+            value=100.0,
+            step=50.0,
+            key="rf_valor",
+        )
+
+    data_aporte = st.date_input(
+        "Data do aporte", value=date.today(), key="rf_data"
+    )
+
+    if st.button("Registrar aporte"):
+        try:
+            registrar_aporte(
+                carteira_id,
+                indexador_sel,
+                percentual_sel,
+                valor_sel,
+                data_aporte.isoformat(),
+            )
+            st.success(
+                f"Aporte de R$ {valor_sel:.2f} em {indexador_sel} "
+                f"{percentual_sel:.0f}% registrado."
+            )
             st.rerun()
+        except ValueError as e:
+            st.error(str(e))
+
+    # =========================
+    # Histórico de aportes (Renda Fixa)
+    # =========================
+
+    aportes = listar_aportes(carteira_id)
+
+    if aportes:
+        st.subheader("Histórico de aportes (Renda Fixa)")
+
+        for ap in aportes:
+            cols = st.columns([2, 1.5, 1.5, 1])
+
+            cols[0].write(f"{ap['indexador']} {ap['percentual_indexador']:.0f}%")
+            cols[1].write(f"R$ {ap['valor']:.2f}")
+            cols[2].write(ap["data_operacao"][:10])
+
+            if cols[3].button("Remover", key=f"rm_rf_{ap['id']}"):
+                remover_aporte(ap["id"])
+                st.rerun()
 
 
 usuario = st.session_state.get("usuario")
