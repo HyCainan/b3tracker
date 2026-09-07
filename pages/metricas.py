@@ -1,7 +1,6 @@
 import plotly.graph_objects as go
 import streamlit as st
-
-from services.metricas import erros_por_ticker, resumo_metricas
+from services.metricas import erros_por_ticker, percentis_latencia_api, resumo_metricas
 
 
 def render_metricas():
@@ -116,6 +115,72 @@ def render_metricas():
         )
 
         st.plotly_chart(fig_comp, use_container_width=True)
+
+    st.divider()
+
+    # =========================
+    # Percentis de latência (API)
+    # =========================
+
+    st.subheader("📊 Distribuição da latência da API (percentis)")
+
+    st.caption(
+        "A média pode ser distorcida por picos isolados de latência. Os "
+        "percentis mostram o comportamento típico (p50) e a cauda da "
+        "distribuição (p90/p95/p99), leitura mais robusta para o TCC."
+    )
+
+    percentis = percentis_latencia_api(dias)
+
+    if percentis["amostras"] == 0:
+        st.caption("Nenhuma chamada real à API neste período para calcular percentis.")
+    else:
+        st.caption(f"Baseado em {percentis['amostras']} chamada(s) real(is) à API.")
+
+        pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
+
+        pc1.metric("Mín", f"{percentis['min_ms']:.0f} ms")
+        pc2.metric("p50", f"{percentis['p50_ms']:.0f} ms")
+        pc3.metric("p90", f"{percentis['p90_ms']:.0f} ms")
+        pc4.metric("p95", f"{percentis['p95_ms']:.0f} ms")
+        pc5.metric("p99", f"{percentis['p99_ms']:.0f} ms")
+        pc6.metric("Máx", f"{percentis['max_ms']:.0f} ms")
+
+        fig_perc = go.Figure(
+            go.Bar(
+                x=["Mín", "p50", "p90", "p95", "p99", "Máx"],
+                y=[
+                    percentis["min_ms"],
+                    percentis["p50_ms"],
+                    percentis["p90_ms"],
+                    percentis["p95_ms"],
+                    percentis["p99_ms"],
+                    percentis["max_ms"],
+                ],
+                marker_color="#3498db",
+                text=[
+                    f"{v:.0f} ms"
+                    for v in [
+                        percentis["min_ms"],
+                        percentis["p50_ms"],
+                        percentis["p90_ms"],
+                        percentis["p95_ms"],
+                        percentis["p99_ms"],
+                        percentis["max_ms"],
+                    ]
+                ],
+                textposition="outside",
+            )
+        )
+
+        fig_perc.update_layout(
+            yaxis_title="Tempo de resposta (ms)",
+            height=320,
+            margin=dict(t=20, b=30),
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig_perc, use_container_width=True)
 
     st.divider()
 
