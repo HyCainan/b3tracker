@@ -5,64 +5,19 @@ from db.database import get_connection
 
 def resumo_metricas(dias=7):
     """
-    Calcula um resumo das métricas técnicas coletadas em log_requisicoes
-    nos últimos `dias` dias: total de requisições, taxa de cache hit,
-    tempo médio de resposta da API (apenas chamadas reais, sem cache) e
-    taxa de erro.
-    """
-    conn = get_connection()
-    cur = conn.cursor()
+    Calcula o resumo das métricas técnicas coletadas em log_requisicoes
+    nos últimos `dias` dias.
 
-    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
-
-    cur.execute(
-        "SELECT * FROM log_requisicoes WHERE registrado_em >= ? ORDER BY registrado_em DESC",
-        (desde,),
-    )
-    rows = [dict(r) for r in cur.fetchall()]
-    conn.close()
-
-    total = len(rows)
-
-    if total == 0:
-        return {
-            "total": 0,
-            "cache_hits": 0,
-            "taxa_cache_hit": 0.0,
-            "tempo_medio_api_ms": 0.0,
-            "taxa_erro": 0.0,
-            "total_erros": 0,
-            "linhas": [],
-        }
-
-    cache_hits = sum(1 for r in rows if r["veio_do_cache"])
-    erros = [r for r in rows if not r["sucesso"]]
-
-    chamadas_api = [
-        r for r in rows if not r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
-    ]
-
-    tempo_medio_api_ms = (
-        sum(r["tempo_resposta_ms"] for r in chamadas_api) / len(chamadas_api)
-        if chamadas_api
-        else 0.0
-    )
-
-    return {
-        "total": total,
-        "cache_hits": cache_hits,
-        "taxa_cache_hit": cache_hits / total * 100,
-        "tempo_medio_api_ms": tempo_medio_api_ms,
-        "taxa_erro": len(erros) / total * 100,
-        "total_erros": len(erros),
-        "linhas": rows,
-    }
-
-
-def erros_por_ticker(dias=7):
-    """
-    Retorna a contagem de erros agrupada por ticker no período, para
-    identificar ativos com problemas recorrentes na integração com a API.
+    Inclui:
+    - volume total de requisições;
+    - taxa de cache hit;
+    - tempo médio da API;
+    - tempo médio do cache;
+    - redução percentual de tempo;
+    - chamadas evitadas na API;
+    - tempo total estimado economizado;
+    - taxa e quantidade de erros;
+    - linhas detalhadas do log.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -71,30 +26,171 @@ def erros_por_ticker(dias=7):
 
     cur.execute(
         """
-        SELECT ticker, COUNT(*) as total_erros
+        SELECT *
         FROM log_requisicoes
-        WHERE registrado_em >= ? AND sucesso = 0
-        GROUP BY ticker
-        ORDER BY total_erros DESC
+        WHERE registrado_em >= ?
+        ORDER BY registrado_em DESC
         """,
         (desde,),
     )
+
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
-    return rows
+
+    total = len(rows)
+
+    # ---------------------------------------------------------
+    # Sem dados
+    # ---------------------------------------------------------
+
+    if total == 0:
+        return {
+            "total": 0,
+            "cache_hits": 0,
+            "taxa_cache_hit": 0.0,
+            "tempo_medio_cache_ms": 0.0,
+            "tempo_medio_api_ms": 0.0,
+            "reducao_tempo_pct": 0.0,
+            "chamadas_evitadas": 0,
+            "tempo_total_economizado_ms": 0.0,
+            "taxa_erro": 0.0,
+            "total_erros": 0,
+            "linhas": [],
+        }
+
+    # ---------------------------------------------------------
+    # Cache
+    # ---------------------------------------------------------
+
+    cache_hits = [
+        r for r in rows if r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
+    ]
+
+    # ---------------------------------------------------------
+    # Chamadas reais à API
+    # ---------------------------------------------------------
+
+    chamadas_api = [
+        r for r in rows if not r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
+    ]
+
+    # ---------------------------------------------------------
+    # Erros
+    # ---------------------------------------------------------
+
+    erros = [r for r in rows if not r["sucesso"]]
+
+    # ---------------------------------------------------------
+    # Tempo médio do cache
+    # ---------------------------------------------------------
+
+    tempo_medio_cache_ms = (
+        sum(r["tempo_resposta_ms"] for r in cache_hits) / len(cache_hits)
+        if cache_hits
+        else 0.0
+    )
+
+    # ---------------------------------------------------------
+    # Tempo médio da API
+    # ---------------------------------------------------------
+
+    tempo_medio_api_ms = (
+        sum(r["tempo_resposta_ms"] for r in chamadas_api) / len(chamadas_api)
+        if chamadas_api
+        else 0.0
+    )
+
+    # ---------------------------------------------------------
+    # Redução percentual proporcionada pelo cache
+    #
+    # Exemplo:
+    # API   = 500 ms
+    # Cache = 5 ms
+    #
+    # redução = 99%
+    # ---------------------------------------------------------
+
+    if tempo_medio_api_ms > 0:
+        reducao_tempo_pct = (
+            (tempo_medio_api_ms - tempo_medio_cache_ms) / tempo_medio_api_ms
+        ) * 100
+    else:
+        reducao_tempo_pct = 0.0
+
+    # Evita percentual negativo em situações anômalas.
+    reducao_tempo_pct = max(reducao_tempo_pct, 0.0)
+
+    # ---------------------------------------------------------
+    # Chamadas evitadas
+    # ---------------------------------------------------------
+
+    chamadas_evitadas = len(cache_hits)
+
+    # ---------------------------------------------------------
+    # Tempo total estimado economizado
+    #
+    # Estimativa:
+    #
+    # nº de cache hits ×
+    # (tempo médio API - tempo médio cache)
+    # ---------------------------------------------------------
+
+    ganho_por_chamada_ms = max(
+        tempo_medio_api_ms - tempo_medio_cache_ms,
+        0.0,
+    )
+
+    tempo_total_economizado_ms = chamadas_evitadas * ganho_por_chamada_ms
+
+    # ---------------------------------------------------------
+    # Resultado
+    # ---------------------------------------------------------
+
+    return {
+        "total": total,
+        "cache_hits": len(cache_hits),
+        "taxa_cache_hit": (len(cache_hits) / total) * 100,
+        "tempo_medio_cache_ms": tempo_medio_cache_ms,
+        "tempo_medio_api_ms": tempo_medio_api_ms,
+        "reducao_tempo_pct": reducao_tempo_pct,
+        "chamadas_evitadas": chamadas_evitadas,
+        "tempo_total_economizado_ms": tempo_total_economizado_ms,
+        "taxa_erro": (len(erros) / total) * 100,
+        "total_erros": len(erros),
+        "linhas": rows,
+    }
 
 
 def comparacao_cache_api(dias=7):
     """
-    Compara o desempenho do caminho de cache com o caminho de chamada real
-    à API dentro do período, para evidenciar o ganho de desempenho trazido
-    pelo cache — um dos objetivos centrais do TCC ("validar a eficácia do
-    cache inteligente através da redução mensurável do tempo de resposta").
+    Retorna exclusivamente as métricas relacionadas à comparação
+    entre cache e API.
 
-    Retorna, entre outras coisas, uma estimativa de tempo economizado: o
-    tempo que teria sido gasto se cada cache hit tivesse, em vez disso,
-    sido uma chamada real à API (usando o tempo médio real de API
-    observado no mesmo período como referência).
+    Reutiliza resumo_metricas() para evitar duplicação de regras
+    de negócio e cálculos.
+    """
+    resumo = resumo_metricas(dias)
+
+    return {
+        "total": resumo["total"],
+        "cache_hits": resumo["cache_hits"],
+        "chamadas_api": resumo["total"] - resumo["cache_hits"],
+        "tempo_medio_cache_ms": resumo["tempo_medio_cache_ms"],
+        "tempo_medio_api_ms": resumo["tempo_medio_api_ms"],
+        "fator_aceleracao": (
+            resumo["tempo_medio_api_ms"] / resumo["tempo_medio_cache_ms"]
+            if resumo["tempo_medio_cache_ms"] > 0
+            else 0.0
+        ),
+        "tempo_economizado_estimado_ms": (resumo["tempo_total_economizado_ms"]),
+        "chamadas_evitadas_pct": (resumo["taxa_cache_hit"]),
+    }
+
+
+def erros_por_ticker(dias=7):
+    """
+    Retorna a quantidade de erros agrupada por ticker
+    dentro do período informado.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -102,62 +198,21 @@ def comparacao_cache_api(dias=7):
     desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
     cur.execute(
-        "SELECT * FROM log_requisicoes WHERE registrado_em >= ?",
+        """
+        SELECT ticker, COUNT(*) AS total_erros
+        FROM log_requisicoes
+        WHERE registrado_em >= ?
+          AND sucesso = 0
+        GROUP BY ticker
+        ORDER BY total_erros DESC
+        """,
         (desde,),
     )
+
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
-    total = len(rows)
-
-    if total == 0:
-        return {
-            "total": 0,
-            "cache_hits": 0,
-            "chamadas_api": 0,
-            "tempo_medio_cache_ms": 0.0,
-            "tempo_medio_api_ms": 0.0,
-            "fator_aceleracao": 0.0,
-            "tempo_economizado_estimado_ms": 0.0,
-            "chamadas_evitadas_pct": 0.0,
-        }
-
-    hits_cache = [
-        r for r in rows if r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
-    ]
-    chamadas_api = [
-        r for r in rows if not r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
-    ]
-
-    tempo_medio_cache_ms = (
-        sum(r["tempo_resposta_ms"] for r in hits_cache) / len(hits_cache)
-        if hits_cache
-        else 0.0
-    )
-    tempo_medio_api_ms = (
-        sum(r["tempo_resposta_ms"] for r in chamadas_api) / len(chamadas_api)
-        if chamadas_api
-        else 0.0
-    )
-
-    fator_aceleracao = (
-        tempo_medio_api_ms / tempo_medio_cache_ms if tempo_medio_cache_ms > 0 else 0.0
-    )
-
-    tempo_economizado_estimado_ms = len(hits_cache) * max(
-        tempo_medio_api_ms - tempo_medio_cache_ms, 0.0
-    )
-
-    return {
-        "total": total,
-        "cache_hits": len(hits_cache),
-        "chamadas_api": len(chamadas_api),
-        "tempo_medio_cache_ms": tempo_medio_cache_ms,
-        "tempo_medio_api_ms": tempo_medio_api_ms,
-        "fator_aceleracao": fator_aceleracao,
-        "tempo_economizado_estimado_ms": tempo_economizado_estimado_ms,
-        "chamadas_evitadas_pct": len(hits_cache) / total * 100,
-    }
+    return rows
 
 
 def percentis_latencia_api(dias=7):
