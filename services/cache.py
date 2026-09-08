@@ -159,21 +159,33 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
     return dados, False
 
 
+def _registrar_log_lote(modo, qtd_tickers, tempo_total_ms):
+    """
+    Registra uma chamada de busca em lote (paralela ou sequencial) para
+    alimentar o comparativo de desempenho apresentado nas Métricas técnicas.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        """
+        INSERT INTO log_buscas_lote (modo, qtd_tickers, tempo_total_ms, registrado_em)
+        VALUES (?, ?, ?, ?)
+        """,
+        (modo, qtd_tickers, tempo_total_ms, datetime.utcnow().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
 def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True):
     """
-    Busca as cotações de múltiplos tickers.
-
-    Se paralelo=True (padrão), usa ThreadPoolExecutor para sobrepor o
-    tempo de espera de rede de cada ticker (I/O bound).
-
-    Se paralelo=False, executa sequencialmente (loop puro, sem threads) —
-    baseline de comparação controlada para o experimento do TCC.
-
-    Retorna uma lista de tuplas (ticker, stock, veio_do_cache, erro) na
-    MESMA ORDEM de `tickers` em ambos os modos.
+    ... (docstring original) ...
     """
     if not tickers:
         return []
+
+    t_inicio_lote = time.perf_counter()
+    modo = "paralelo" if paralelo else "sequencial"
 
     if not paralelo:
         resultados_seq = []
@@ -183,6 +195,9 @@ def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True
                 resultados_seq.append((ticker, stock, veio_do_cache, None))
             except Exception as e:
                 resultados_seq.append((ticker, None, False, str(e)))
+
+        tempo_total_ms = (time.perf_counter() - t_inicio_lote) * 1000
+        _registrar_log_lote(modo, len(tickers), tempo_total_ms)
         return resultados_seq
 
     resultados = {}
@@ -201,5 +216,8 @@ def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True
                 resultados[ticker] = (stock, veio_do_cache, None)
             except Exception as e:
                 resultados[ticker] = (None, False, str(e))
+
+    tempo_total_ms = (time.perf_counter() - t_inicio_lote) * 1000
+    _registrar_log_lote(modo, len(tickers), tempo_total_ms)
 
     return [(ticker, *resultados[ticker]) for ticker in tickers]

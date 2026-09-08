@@ -60,6 +60,21 @@ def init_db():
     """)
 
     # =========================
+    # Log de buscas em lote (paralelo vs. sequencial)
+    # =========================
+    # Registra cada chamada a services.cache.buscar_ativos_paralelo: quantos
+    # tickers foram buscados, em qual modo (paralelo/sequencial) e o tempo
+    # total da operação. Base do experimento comparativo do TCC.
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS log_buscas_lote (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            modo TEXT NOT NULL CHECK (modo IN ('paralelo', 'sequencial')),
+            qtd_tickers INTEGER NOT NULL,
+            tempo_total_ms REAL NOT NULL,
+            registrado_em TEXT NOT NULL
+        )
+    """)
+    # =========================
     # Aportes em Renda Fixa (CDI/Selic)
     # =========================
     # Cada linha representa um aporte em um indexador (CDI ou SELIC) a um

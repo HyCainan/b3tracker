@@ -270,3 +270,55 @@ def percentis_latencia_api(dias=7):
         "max_ms": tempos[-1],
         "tempos": tempos,
     }
+
+
+def comparacao_paralelo_sequencial(dias=7):
+    """
+    Compara o tempo total de busca em lote entre os modos paralelo e
+    sequencial (services.cache.buscar_ativos_paralelo), agrupando por modo.
+    Base do experimento comparativo de paralelismo do TCC.
+    """
+    conn = get_connection()
+    cur = conn.cursor()
+
+    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
+
+    cur.execute(
+        """
+        SELECT * FROM log_buscas_lote
+        WHERE registrado_em >= ?
+        ORDER BY registrado_em DESC
+        """,
+        (desde,),
+    )
+    rows = [dict(r) for r in cur.fetchall()]
+    conn.close()
+
+    paralelas = [r for r in rows if r["modo"] == "paralelo"]
+    sequenciais = [r for r in rows if r["modo"] == "sequencial"]
+
+    def _media(lista, campo):
+        return sum(r[campo] for r in lista) / len(lista) if lista else 0.0
+
+    tempo_medio_paralelo = _media(paralelas, "tempo_total_ms")
+    tempo_medio_sequencial = _media(sequenciais, "tempo_total_ms")
+
+    fator_speedup = (
+        tempo_medio_sequencial / tempo_medio_paralelo
+        if tempo_medio_paralelo > 0
+        else 0.0
+    )
+
+    media_tickers_paralelo = _media(paralelas, "qtd_tickers")
+    media_tickers_sequencial = _media(sequenciais, "qtd_tickers")
+
+    return {
+        "total_paralelo": len(paralelas),
+        "total_sequencial": len(sequenciais),
+        "tempo_medio_paralelo_ms": tempo_medio_paralelo,
+        "tempo_medio_sequencial_ms": tempo_medio_sequencial,
+        "fator_speedup": fator_speedup,
+        "media_tickers_paralelo": media_tickers_paralelo,
+        "media_tickers_sequencial": media_tickers_sequencial,
+        "linhas": rows,
+    }

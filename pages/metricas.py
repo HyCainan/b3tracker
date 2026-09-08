@@ -1,7 +1,11 @@
 import plotly.graph_objects as go
 import streamlit as st
 
-from services.metricas import percentis_latencia_api, resumo_metricas
+from services.metricas import (
+    comparacao_paralelo_sequencial,
+    percentis_latencia_api,
+    resumo_metricas,
+)
 
 
 def render_metricas():
@@ -181,6 +185,83 @@ def render_metricas():
         )
 
         st.plotly_chart(fig_comp, use_container_width=True)
+
+    # =========================
+    # Paralelo vs. Sequencial — busca em lote
+    # =========================
+
+    st.subheader("🧵 Paralelo vs. Sequencial — busca em lote")
+
+    st.caption(
+        "Compara o tempo total de busca de múltiplos ativos em modo paralelo "
+        "(ThreadPoolExecutor) contra o modo sequencial (baseline), medido no "
+        "Dashboard via a opção 'Modo sequencial (baseline)'."
+    )
+
+    comp_par = comparacao_paralelo_sequencial(dias)
+
+    tem_paralelo = comp_par["total_paralelo"] > 0
+    tem_sequencial = comp_par["total_sequencial"] > 0
+
+    if not (tem_paralelo and tem_sequencial):
+        st.caption(
+            "Ainda não há amostras dos dois modos no mesmo período. No "
+            "Dashboard, busque ativos com e sem o 'Modo sequencial' marcado "
+            "para gerar o comparativo."
+        )
+    else:
+        pp1, pp2, pp3, pp4 = st.columns(4)
+
+        pp1.metric(
+            "Tempo médio — Paralelo",
+            f"{comp_par['tempo_medio_paralelo_ms']:.0f} ms",
+        )
+
+        pp2.metric(
+            "Tempo médio — Sequencial",
+            f"{comp_par['tempo_medio_sequencial_ms']:.0f} ms",
+        )
+
+        pp3.metric(
+            "Ganho de velocidade",
+            f"{comp_par['fator_speedup']:.2f}x",
+        )
+
+        pp4.metric(
+            "Amostras (par. / seq.)",
+            f"{comp_par['total_paralelo']} / {comp_par['total_sequencial']}",
+        )
+
+        fig_par = go.Figure(
+            go.Bar(
+                x=["Paralelo", "Sequencial"],
+                y=[
+                    comp_par["tempo_medio_paralelo_ms"],
+                    comp_par["tempo_medio_sequencial_ms"],
+                ],
+                marker_color=["#9b59b6", "#e67e22"],
+                text=[
+                    f"{comp_par['tempo_medio_paralelo_ms']:.0f} ms",
+                    f"{comp_par['tempo_medio_sequencial_ms']:.0f} ms",
+                ],
+                textposition="outside",
+            )
+        )
+
+        fig_par.update_layout(
+            yaxis_title="Tempo total médio de busca em lote (ms)",
+            height=320,
+            margin=dict(t=20, b=30),
+            showlegend=False,
+        )
+
+        st.plotly_chart(fig_par, use_container_width=True)
+
+        st.caption(
+            f"Em média, cada busca paralela cobriu "
+            f"{comp_par['media_tickers_paralelo']:.1f} ativo(s), contra "
+            f"{comp_par['media_tickers_sequencial']:.1f} no modo sequencial."
+        )
 
     st.divider()
 
