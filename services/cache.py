@@ -1,7 +1,7 @@
 import json
 import time
 from datetime import datetime, timedelta
-
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 from db.database import get_connection
@@ -157,3 +157,49 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
     )
 
     return dados, False
+
+
+def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True):
+    """
+    Busca as cotações de múltiplos tickers.
+
+    Se paralelo=True (padrão), usa ThreadPoolExecutor para sobrepor o
+    tempo de espera de rede de cada ticker (I/O bound).
+
+    Se paralelo=False, executa sequencialmente (loop puro, sem threads) —
+    baseline de comparação controlada para o experimento do TCC.
+
+    Retorna uma lista de tuplas (ticker, stock, veio_do_cache, erro) na
+    MESMA ORDEM de `tickers` em ambos os modos.
+    """
+    if not tickers:
+        return []
+
+    if not paralelo:
+        resultados_seq = []
+        for ticker in tickers:
+            try:
+                stock, veio_do_cache = buscar_ativo(ticker, periodo, token)
+                resultados_seq.append((ticker, stock, veio_do_cache, None))
+            except Exception as e:
+                resultados_seq.append((ticker, None, False, str(e)))
+        return resultados_seq
+
+    resultados = {}
+    workers = max(1, min(max_workers, len(tickers)))
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futuros = {
+            executor.submit(buscar_ativo, ticker, periodo, token): ticker
+            for ticker in tickers
+        }
+
+        for futuro in as_completed(futuros):
+            ticker = futuros[futuro]
+            try:
+                stock, veio_do_cache = futuro.result()
+                resultados[ticker] = (stock, veio_do_cache, None)
+            except Exception as e:
+                resultados[ticker] = (None, False, str(e))
+
+    return [(ticker, *resultados[ticker]) for ticker in tickers]

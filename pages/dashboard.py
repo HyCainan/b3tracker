@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, timezone
+import time
 
 import plotly.graph_objects as go
 import streamlit as st
@@ -8,7 +9,8 @@ from dotenv import load_dotenv
 from services.cache import (
     PERIODOS,
     TICKERS_DISPONIVEIS,
-    buscar_ativo,
+    buscar_ativos_paralelo,
+    # buscar_ativo,
 )
 
 # =========================
@@ -57,36 +59,45 @@ def render_dashboard(token):
             index=1,
         )
 
+    modo_sequencial = st.checkbox(
+        "Modo sequencial (baseline)",
+        value=False,
+        help=(
+            "Desativa a busca paralela e executa as requisições uma a uma, "
+            "para fins de comparação de desempenho (experimento do TCC)."
+        ),
+    )
+
     if not selecionados:
         st.info("Selecione ao menos um ativo para ver as cotações.")
 
         return
-
     periodo = PERIODOS[periodo_label]
 
     resultados = []
     cache_hits = 0
 
+    t_inicio_fetch = time.perf_counter()
+
     with st.spinner("Buscando cotações..."):
-        for ticker in selecionados:
-            try:
-                stock, veio_do_cache = buscar_ativo(
-                    ticker,
-                    periodo,
-                    token,
-                )
+        respostas = buscar_ativos_paralelo(
+            selecionados,
+            periodo,
+            token,
+            paralelo=not modo_sequencial,
+        )
 
-                if stock:
-                    resultados.append(stock)
+        for ticker, stock, veio_do_cache, erro in respostas:
+            if erro:
+                st.error(f"Erro ao buscar {ticker}: {erro}")
+            elif stock:
+                resultados.append(stock)
+                if veio_do_cache:
+                    cache_hits += 1
+            else:
+                st.warning(f"Não foi possível buscar dados de {ticker}.")
 
-                    if veio_do_cache:
-                        cache_hits += 1
-
-                else:
-                    st.warning(f"Não foi possível buscar dados de {ticker}.")
-
-            except Exception as e:
-                st.error(f"Erro ao buscar {ticker}: {e}")
+    tempo_total_fetch_ms = (time.perf_counter() - t_inicio_fetch) * 1000
 
     if not resultados:
         st.error("Nenhum dado encontrado.")
@@ -96,6 +107,12 @@ def render_dashboard(token):
         st.caption(
             f"⚡ {cache_hits}/{len(resultados)} cotações servidas pelo cache local."
         )
+
+    modo_label = "sequencial" if modo_sequencial else "paralelo"
+    st.caption(
+        f"⏱️ Busca concluída em {tempo_total_fetch_ms:.0f} ms "
+        f"para {len(selecionados)} ativo(s) — modo {modo_label}."
+    )
 
     # =========================
     # Cotação atual

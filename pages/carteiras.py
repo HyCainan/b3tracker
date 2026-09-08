@@ -4,8 +4,7 @@ from datetime import date
 import plotly.graph_objects as go
 import streamlit as st
 from dotenv import load_dotenv
-
-from services.cache import TICKERS_DISPONIVEIS, buscar_ativo
+from services.cache import TICKERS_DISPONIVEIS, buscar_ativos_paralelo, buscar_ativo
 from services.carteira import (
     calcular_posicoes,
     criar_carteira,
@@ -34,64 +33,65 @@ BRAPI_TOKEN = os.getenv("BRAPI_TOKEN")
 def calcular_metricas_acoes(posicoes, token):
     """
     Para cada posição (quantidade + preço médio, vindos das operações
-    reais), busca o preço atual de mercado e calcula o P/L com base no
-    custo efetivo.
+    reais), busca o preço atual de mercado (em paralelo) e calcula o
+    P/L com base no custo efetivo.
     """
     detalhes = []
     total_investido = 0.0
     total_atual = 0.0
 
+    tickers = [pos["ticker"] for pos in posicoes]
+
     with st.spinner("Calculando performance das ações..."):
-        for pos in posicoes:
-            ticker = pos["ticker"]
-            custo_total = pos["custo_total"]
+        respostas = buscar_ativos_paralelo(tickers, "1mo", token)
+        cotacoes = {ticker: stock for ticker, stock, _, _ in respostas}
 
-            total_investido += custo_total
+    for pos in posicoes:
+        ticker = pos["ticker"]
+        custo_total = pos["custo_total"]
+        stock = cotacoes.get(ticker)
 
-            try:
-                stock, _ = buscar_ativo(ticker, "1mo", token)
-            except Exception:
-                stock = None
+        total_investido += custo_total
 
-            if not stock:
-                detalhes.append(
-                    {
-                        "ticker": ticker,
-                        "quantidade": pos["quantidade"],
-                        "preco_medio": pos["preco_medio"],
-                        "custo_total": custo_total,
-                        "valor_atual": custo_total,
-                        "preco_atual": None,
-                        "variacao_pct": 0.0,
-                        "variacao_dia": 0.0,
-                        "ganho": 0.0,
-                        "erro": True,
-                    }
-                )
-                total_atual += custo_total
-                continue
-
-            preco_atual = stock.get("regularMarketPrice", pos["preco_medio"])
-            valor_atual = pos["quantidade"] * preco_atual
-            ganho = valor_atual - custo_total
-            variacao_pct = (ganho / custo_total * 100) if custo_total else 0.0
-
-            total_atual += valor_atual
-
+        if not stock:
             detalhes.append(
                 {
                     "ticker": ticker,
                     "quantidade": pos["quantidade"],
                     "preco_medio": pos["preco_medio"],
                     "custo_total": custo_total,
-                    "valor_atual": valor_atual,
-                    "preco_atual": preco_atual,
-                    "variacao_pct": variacao_pct,
-                    "variacao_dia": stock.get("regularMarketChangePercent", 0) or 0,
-                    "ganho": ganho,
-                    "erro": False,
+                    "valor_atual": custo_total,
+                    "preco_atual": None,
+                    "variacao_pct": 0.0,
+                    "variacao_dia": 0.0,
+                    "ganho": 0.0,
+                    "erro": True,
                 }
             )
+            total_atual += custo_total
+            continue
+
+        preco_atual = stock.get("regularMarketPrice", pos["preco_medio"])
+        valor_atual = pos["quantidade"] * preco_atual
+        ganho = valor_atual - custo_total
+        variacao_pct = (ganho / custo_total * 100) if custo_total else 0.0
+
+        total_atual += valor_atual
+
+        detalhes.append(
+            {
+                "ticker": ticker,
+                "quantidade": pos["quantidade"],
+                "preco_medio": pos["preco_medio"],
+                "custo_total": custo_total,
+                "valor_atual": valor_atual,
+                "preco_atual": preco_atual,
+                "variacao_pct": variacao_pct,
+                "variacao_dia": stock.get("regularMarketChangePercent", 0) or 0,
+                "ganho": ganho,
+                "erro": False,
+            }
+        )
 
     ganho_total = total_atual - total_investido
     variacao_total_pct = (
