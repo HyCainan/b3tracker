@@ -200,7 +200,7 @@ def render_performance_carteira(carteira_id, token):
                 f"🟢 Maior alta: **{melhor['rotulo']}** ({melhor['variacao_pct']:+.2f}%)"
             )
             st.write(
-                f"🔴 Maior queda: **{pior['rotulo']}** ({pior['variacao_pct']:+.2f}%)"
+                f"🔴 Menor alta: **{pior['rotulo']}** ({pior['variacao_pct']:+.2f}%)"
             )
 
     st.caption(

@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from db.database import get_connection
-from services.indexadores import rendimento_desde
+from services.api_rendafixa import rendimento_desde
 
 
 # =========================
@@ -9,7 +9,9 @@ from services.indexadores import rendimento_desde
 # =========================
 
 
-def registrar_aporte(carteira_id, indexador, percentual_indexador, valor, data_operacao):
+def registrar_aporte(
+    carteira_id, indexador, percentual_indexador, valor, data_operacao
+):
     """
     Registra um aporte em renda fixa indexado a CDI ou SELIC.
     `data_operacao` no formato ISO (ex: "2026-09-01").

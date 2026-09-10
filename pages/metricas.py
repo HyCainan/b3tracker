@@ -9,7 +9,7 @@ from services.metricas import (
 
 
 def render_metricas():
-    st.title("🛠️ Métricas técnicas")
+    st.title(" Métricas técnicas")
 
     st.caption(
         "Indicadores de desempenho e qualidade coletados automaticamente a "
@@ -64,7 +64,7 @@ def render_metricas():
     # Percentis de latência (API)
     # =========================
 
-    st.subheader("📊 Distribuição da latência da API (percentis)")
+    st.subheader(" Distribuição da latência da API (percentis)")
 
     st.caption(
         "A média pode ser distorcida por picos isolados de latência. Os "
@@ -129,7 +129,7 @@ def render_metricas():
     # Comparativo: Cache vs. API
     # =========================
 
-    st.subheader("⚡ Cache vs. API — economia de desempenho")
+    st.subheader(" Cache vs. API — economia de desempenho")
 
     st.caption(
         "Compara o tempo de resposta servido pelo cache local com o de uma "
@@ -190,7 +190,7 @@ def render_metricas():
     # Paralelo vs. Sequencial — busca em lote
     # =========================
 
-    st.subheader("🧵 Paralelo vs. Sequencial — busca em lote")
+    st.subheader(" Paralelo vs. Sequencial — busca em lote")
 
     st.caption(
         "Compara o tempo total de busca de múltiplos ativos em modo paralelo "
