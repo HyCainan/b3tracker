@@ -41,7 +41,7 @@ def calcular_estatisticas(usuario_id):
 
 
 def render_perfil(usuario_id):
-    st.title("👤 Meu perfil")
+    st.title(" Meu perfil")
 
     dados = buscar_usuario_por_id(usuario_id)
 
