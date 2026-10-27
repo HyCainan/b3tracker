@@ -22,8 +22,18 @@ TICKERS_DISPONIVEIS = [
     "RAIL3",
     "TOTS3",
     "HAPV3",
+    # Novos ativos
+    "B3SA3",
+    "BBSE3",
+    "EQTL3",
+    "ISAE4",
+    "VIVT3",
+    "EMBJ3",
+    "BPAC11",
+    "CPLE3",
+    "TAEE11",
+    "RDOR3",
 ]
-
 PERIODOS = {
     "1 mês": "1mo",
     "3 meses": "3mo",
