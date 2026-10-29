@@ -495,14 +495,25 @@ def render_carteira(usuario_id, token):
     if aportes:
         st.subheader("Histórico de aportes (Renda Fixa)")
 
+        posicoes_rf = {p["id"]: p for p in calcular_posicoes_rf(carteira_id)}
+
         for ap in aportes:
-            cols = st.columns([2, 1.5, 1.5, 1])
+            pos = posicoes_rf.get(ap["id"], {})
+            taxa = pos.get("taxa_anual_pct")
+
+            cols = st.columns([1.5, 1.5, 1.4, 1.4, 1.5, 1])
 
             cols[0].write(f"{ap['indexador']} {ap['percentual_indexador']:.0f}%")
-            cols[1].write(f"R$ {ap['valor']:.2f}")
-            cols[2].write(ap["data_operacao"][:10])
+            cols[1].write(f"{taxa:.2f}% a.a." if taxa is not None else "—")
+            cols[2].write(f"R$ {ap['valor']:.2f}")
+            cols[3].write(ap["data_operacao"][:10])
 
-            if cols[3].button("Remover", key=f"rm_rf_{ap['id']}"):
+            if pos and not pos.get("erro"):
+                cols[4].caption(f"Rendeu {pos['variacao_pct']:+.2f}%")
+            else:
+                cols[4].caption("Sem dados")
+
+            if cols[5].button("Remover", key=f"rm_rf_{ap['id']}"):
                 remover_aporte(ap["id"])
                 st.rerun()
 

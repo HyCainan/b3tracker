@@ -71,7 +71,11 @@ def resumo_metricas(dias=7):
     # ---------------------------------------------------------
 
     chamadas_api = [
-        r for r in rows if not r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
+        r
+        for r in rows
+        if not r["veio_do_cache"]
+        and r["sucesso"]
+        and r["tempo_resposta_ms"] is not None
     ]
 
     # ---------------------------------------------------------
@@ -230,7 +234,8 @@ def percentis_latencia_api(dias=7):
     cur.execute(
         """
         SELECT tempo_resposta_ms FROM log_requisicoes
-        WHERE registrado_em >= ? AND veio_do_cache = 0 AND tempo_resposta_ms IS NOT NULL
+        WHERE registrado_em >= ? AND veio_do_cache = 0 AND sucesso = 1
+            AND tempo_resposta_ms IS NOT NULL
         """,
         (desde,),
     )

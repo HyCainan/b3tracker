@@ -136,5 +136,15 @@ def init_db():
         )
     """)
 
+    # Migração: coluna `fonte` em log_requisicoes (brapi | yfinance | bcb)
+    colunas = [r["name"] for r in cur.execute("PRAGMA table_info(log_requisicoes)")]
+    if "fonte" not in colunas:
+        cur.execute("ALTER TABLE log_requisicoes ADD COLUMN fonte TEXT")
+        cur.execute("""
+            UPDATE log_requisicoes
+            SET fonte = CASE WHEN ticker LIKE '[%' THEN 'bcb' ELSE 'brapi' END
+            WHERE fonte IS NULL
+        """)
+
     conn.commit()
     conn.close()

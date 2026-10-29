@@ -1,7 +1,7 @@
 from datetime import datetime, timezone
 
 from db.database import get_connection
-from services.api_rendafixa import rendimento_desde
+from services.api_rendafixa import rendimento_desde, taxa_anual_atual
 
 
 # =========================
@@ -99,6 +99,13 @@ def calcular_posicoes(carteira_id):
             variacao_pct = 0.0
             erro = True
 
+        try:
+            taxa_anual = taxa_anual_atual(
+                aporte["indexador"], aporte["percentual_indexador"]
+            )
+        except Exception:
+            taxa_anual = None
+
         valor_atual = aporte["valor"] * (1 + variacao_pct / 100)
 
         posicoes.append(
@@ -106,6 +113,7 @@ def calcular_posicoes(carteira_id):
                 "id": aporte["id"],
                 "rotulo": f"{aporte['indexador']} {aporte['percentual_indexador']:.0f}%",
                 "indexador": aporte["indexador"],
+                "taxa_anual_pct": taxa_anual,
                 "percentual_indexador": aporte["percentual_indexador"],
                 "valor_aportado": aporte["valor"],
                 "valor_atual": valor_atual,

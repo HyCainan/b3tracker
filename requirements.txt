@@ -5,3 +5,4 @@ requests
 bcrypt
 python-dotenv
 plotly
+yfinance

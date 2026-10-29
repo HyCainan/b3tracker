@@ -34,8 +34,8 @@ def _registrar_log(
     cur.execute(
         """
         INSERT INTO log_requisicoes
-            (ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro, registrado_em)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (ticker, periodo, veio_do_cache, sucesso, tempo_resposta_ms, erro, registrado_em, fonte)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'bcb')
         """,
         (
             f"[{indexador}]",
@@ -137,3 +137,72 @@ def rendimento_desde(
     _registrar_log(indexador, chave, False, True, tempo_ms)
 
     return (fator ** (percentual_indexador / 100) - 1) * 100
+
+
+def taxa_anual_atual(indexador, percentual_indexador=100.0, ttl_minutos=60):
+    """
+    Taxa anualizada (base 252 dias úteis) vigente do indexador, já aplicando
+    o percentual contratado. Usa o último valor diário da série SGS e reaproveita
+    cache_indexadores (chave "TAXA_ANUAL:<indexador>:<data>").
+    """
+    t_inicio = time.perf_counter()
+
+    codigo_serie = CODIGOS_SGS.get(indexador)
+    if codigo_serie is None:
+        raise ValueError(f"Indexador desconhecido: {indexador}")
+
+    hoje = date.today()
+    chave = f"TAXA_ANUAL:{indexador}:{hoje.isoformat()}"
+
+    conn = get_connection()
+    cur = conn.cursor()
+    cur.execute(
+        "SELECT valor_acumulado, coletado_em FROM cache_indexadores WHERE chave = ?",
+        (chave,),
+    )
+    row = cur.fetchone()
+
+    if row is not None:
+        coletado_em = datetime.fromisoformat(row["coletado_em"])
+        if datetime.now(timezone.utc) - coletado_em < timedelta(minutes=ttl_minutos):
+            base_anual = row["valor_acumulado"]
+            conn.close()
+            _registrar_log(
+                indexador, chave, True, True, (time.perf_counter() - t_inicio) * 1000
+            )
+            return ((1 + base_anual / 100) ** (percentual_indexador / 100) - 1) * 100
+
+    t0 = time.perf_counter()
+    try:
+        dados = _chamar_bcb(
+            codigo_serie,
+            (hoje - timedelta(days=10)).strftime("%d/%m/%Y"),
+            hoje.strftime("%d/%m/%Y"),
+        )
+        taxa_dia = float(str(dados[-1]["valor"]).replace(",", "."))
+    except Exception as e:
+        conn.close()
+        _registrar_log(
+            indexador, chave, False, False, (time.perf_counter() - t0) * 1000, str(e)
+        )
+        raise
+
+    tempo_ms = (time.perf_counter() - t0) * 1000
+    base_anual = ((1 + taxa_dia / 100) ** 252 - 1) * 100
+
+    cur.execute(
+        """
+        INSERT INTO cache_indexadores (chave, valor_acumulado, coletado_em)
+        VALUES (?, ?, ?)
+        ON CONFLICT(chave) DO UPDATE SET
+            valor_acumulado = excluded.valor_acumulado,
+            coletado_em = excluded.coletado_em
+        """,
+        (chave, base_anual, datetime.now(timezone.utc).isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+    _registrar_log(indexador, chave, False, True, tempo_ms)
+
+    return ((1 + base_anual / 100) ** (percentual_indexador / 100) - 1) * 100
