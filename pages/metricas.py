@@ -2,6 +2,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from services.metricas import (
+    CATEGORIAS,
     comparacao_paralelo_sequencial,
     percentis_latencia_api,
     resumo_metricas,
@@ -13,11 +14,12 @@ def render_metricas():
 
     st.caption(
         "Indicadores de desempenho e qualidade coletados automaticamente a "
-        "cada consulta à API da brapi.dev (Dashboard e Carteiras), usados "
+        "cada consulta às fontes externas de dados (cotações de ações e "
+        "indexadores CDI/Selic), no Dashboard e nas Carteiras, usados "
         "como base para os resultados do TCC."
     )
 
-    col_periodo, _ = st.columns([1, 3])
+    col_periodo, col_categoria, _ = st.columns([1, 1.4, 1.6])
 
     with col_periodo:
         dias = st.selectbox(
@@ -27,11 +29,23 @@ def render_metricas():
             format_func=lambda d: f"Últimos {d} dia(s)",
         )
 
-    resumo = resumo_metricas(dias)
+    with col_categoria:
+        categoria = st.selectbox(
+            "Categoria",
+            options=list(CATEGORIAS.keys()),
+            format_func=lambda c: CATEGORIAS[c],
+            help=(
+                "Ações e renda fixa usam fontes externas diferentes, com "
+                "perfis de latência distintos; por isso são analisadas "
+                "separadamente."
+            ),
+        )
+
+    resumo = resumo_metricas(dias, categoria)
 
     if resumo["total"] == 0:
         st.info(
-            "Ainda não há requisições registradas neste período. "
+            "Ainda não há requisições registradas neste período e categoria. "
             "Navegue pelo Dashboard ou pelas Carteiras para gerar dados."
         )
         return
@@ -47,7 +61,7 @@ def render_metricas():
     col2.metric("Taxa de cache hit", f"{resumo['taxa_cache_hit']:.1f}%")
 
     col3.metric(
-        "Tempo médio de resposta (API)",
+        "Tempo médio de resposta (fonte externa)",
         f"{resumo['tempo_medio_api_ms']:.0f} ms",
     )
 
@@ -58,13 +72,20 @@ def render_metricas():
         delta_color="inverse",
     )
 
+    if resumo["cache_descartados"]:
+        st.caption(
+            f"{resumo['cache_descartados']} registro(s) de cache com tempo "
+            "de 0 ms (artefato de medição) foram desconsiderados no tempo "
+            "médio do cache; continuam contando como cache hit."
+        )
+
     st.divider()
 
     # =========================
-    # Percentis de latência (API)
+    # Percentis de latência (fonte externa)
     # =========================
 
-    st.subheader(" Distribuição da latência da API (percentis)")
+    st.subheader(" Distribuição da latência da fonte externa (percentis)")
 
     st.caption(
         "A média pode ser distorcida por picos isolados de latência. Os "
@@ -72,12 +93,17 @@ def render_metricas():
         "distribuição (p90/p95/p99), leitura mais robusta para o TCC."
     )
 
-    percentis = percentis_latencia_api(dias)
+    percentis = percentis_latencia_api(dias, categoria)
 
     if percentis["amostras"] == 0:
-        st.caption("Nenhuma chamada real à API neste período para calcular percentis.")
+        st.caption(
+            "Nenhuma chamada real à fonte externa neste período para "
+            "calcular percentis."
+        )
     else:
-        st.caption(f"Baseado em {percentis['amostras']} chamada(s) real(is) à API.")
+        st.caption(
+            f"Baseado em {percentis['amostras']} chamada(s) real(is) à fonte externa."
+        )
 
         pc1, pc2, pc3, pc4, pc5, pc6 = st.columns(6)
         pc1.metric("Mín", f"{percentis['min_ms']:.0f} ms")
@@ -126,14 +152,14 @@ def render_metricas():
     st.divider()
 
     # =========================
-    # Comparativo: Cache vs. API
+    # Comparativo: Cache vs. fonte externa
     # =========================
 
-    st.subheader(" Cache vs. API — economia de desempenho")
+    st.subheader(" Cache vs. fonte externa — economia de desempenho")
 
     st.caption(
         "Compara o tempo de resposta servido pelo cache local com o de uma "
-        "chamada real à API externa, estimando o ganho de desempenho e o "
+        "chamada real à fonte externa, estimando o ganho de desempenho e o "
         "volume de acessos externos evitados — resultado central do TCC."
     )
 
@@ -142,16 +168,18 @@ def render_metricas():
 
     if not (tem_cache and tem_api):
         st.caption(
-            "Ainda não há amostras suficientes de cache e API no mesmo "
-            "período para montar o comparativo. Navegue pelo sistema até "
-            "gerar tanto cache hits quanto chamadas reais à API."
+            "Ainda não há amostras suficientes de cache e fonte externa no "
+            "mesmo período para montar o comparativo. Navegue pelo sistema "
+            "até gerar tanto cache hits quanto chamadas reais."
         )
     else:
         cc1, cc2, cc3, cc4 = st.columns(4)
 
         cc1.metric("Tempo médio — Cache", f"{resumo['tempo_medio_cache_ms']:.1f} ms")
 
-        cc2.metric("Tempo médio — API", f"{resumo['tempo_medio_api_ms']:.0f} ms")
+        cc2.metric(
+            "Tempo médio — Fonte externa", f"{resumo['tempo_medio_api_ms']:.0f} ms"
+        )
 
         cc3.metric(
             "Redução de tempo com cache",
@@ -159,14 +187,14 @@ def render_metricas():
         )
 
         cc4.metric(
-            "Chamadas evitadas na API",
+            "Chamadas evitadas na fonte externa",
             resumo["chamadas_evitadas"],
             delta=f"~{resumo['tempo_total_economizado_ms'] / 1000:.2f} s economizados",
         )
 
         fig_comp = go.Figure(
             go.Bar(
-                x=["Cache", "API"],
+                x=["Cache", "Fonte externa"],
                 y=[resumo["tempo_medio_cache_ms"], resumo["tempo_medio_api_ms"]],
                 marker_color=["#2ecc71", "#3498db"],
                 text=[
@@ -195,10 +223,21 @@ def render_metricas():
     st.caption(
         "Compara o tempo total de busca de múltiplos ativos em modo paralelo "
         "(ThreadPoolExecutor) contra o modo sequencial (baseline), medido no "
-        "Dashboard via a opção 'Modo sequencial (baseline)'."
+        "Dashboard via a opção 'Modo sequencial (baseline)'. Este comparativo "
+        "se refere somente a cotações de ações."
     )
 
-    comp_par = comparacao_paralelo_sequencial(dias)
+    apenas_comparaveis = st.checkbox(
+        "Considerar apenas lotes comparáveis (cache frio e sem erros)",
+        value=True,
+        help=(
+            "Um lote servido pelo cache, ou com falhas, não mede o ganho do "
+            "paralelismo. Lotes registrados antes desta informação existir "
+            "ficam de fora enquanto o filtro estiver ativo."
+        ),
+    )
+
+    comp_par = comparacao_paralelo_sequencial(dias, apenas_comparaveis)
 
     tem_paralelo = comp_par["total_paralelo"] > 0
     tem_sequencial = comp_par["total_sequencial"] > 0

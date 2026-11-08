@@ -1,0 +1,9 @@
+rodada,ordem,modo,cenario,qtd_tickers,tempo_ms,cache_hits,erros,registrado_em
+1,1,paralelo,frio,25,14833.5,0,2,2026-11-07T01:58:57.978275
+1,1,paralelo,quente,25,2711.0,23,0,2026-11-07T01:59:02.690150
+1,2,sequencial,frio,25,30015.6,0,0,2026-11-07T01:59:34.774691
+1,2,sequencial,quente,25,907.9,25,0,2026-11-07T01:59:37.684032
+2,1,sequencial,frio,25,33652.6,0,0,2026-11-07T02:00:13.373255
+2,1,sequencial,quente,25,1356.6,25,0,2026-11-07T02:00:16.730591
+2,2,paralelo,frio,25,8274.5,0,1,2026-11-07T02:00:27.051957
+2,2,paralelo,quente,25,1440.7,24,0,2026-11-07T02:00:30.493506

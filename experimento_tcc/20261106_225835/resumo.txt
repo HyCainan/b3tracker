@@ -1,0 +1,30 @@
+== Configuração ==
+rodadas: 2  período: 1mo  pausa: 2.0s
+tickers (25): PETR4, VALE3, MGLU3, ITUB4, BBDC4, ABEV3, WEGE3, RENT3, BBAS3, EGIE3, RADL3, SUZB3, RAIL3, TOTS3, HAPV3, B3SA3, BBSE3, EQTL3, ISAE4, VIVT3, EMBJ3, BPAC11, CPLE3, TAEE11, RDOR3
+
+== Tempo total do lote (ms), somente execuções sem erro ==
+frio   paralelo   n=0  (execuções: 2)
+frio   sequencial n=2  mediana=31834  média=31834  dp=2572  mín=30016  máx=33653  (execuções: 2)
+quente paralelo   n=2  mediana=2076  média=2076  dp=898  mín=1441  máx=2711  (execuções: 2)
+quente sequencial n=2  mediana=1132  média=1132  dp=317  mín=908  máx=1357  (execuções: 2)
+
+== Speedup pareado (sequencial / paralelo, cache frio) ==
+nenhuma rodada pareada sem erros.
+
+== Ganho do cache (frio / quente, pareado por rodada e modo) ==
+paralelo   sem pares válidos.
+sequencial pares=2  mediana=28.9x  média=28.9x
+
+== Execuções com erro ==
+2 de 8 execuções tiveram ao menos um erro.
+
+== Ambiente de execução ==
+SO: Windows-11-10.0.22631-SP0
+Processador: Intel64 Family 6 Model 142 Stepping 12, GenuineIntel
+Núcleos lógicos: 8
+Python: 3.13.5
+streamlit: 1.56.0
+requests: 2.32.5
+yfinance: 1.7.0
+plotly: 6.7.0
+bcrypt: 5.0.0

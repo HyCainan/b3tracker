@@ -65,6 +65,13 @@ def init_db():
     # Registra cada chamada a services.cache.buscar_ativos_paralelo: quantos
     # tickers foram buscados, em qual modo (paralelo/sequencial) e o tempo
     # total da operação. Base do experimento comparativo do TCC.
+    #
+    # Colunas adicionadas por migração (ver abaixo), para tornar o
+    # comparativo auditável:
+    #   cache_hits -> quantos tickers do lote vieram do cache
+    #   erros      -> quantos tickers do lote terminaram sem dados
+    #   cenario    -> 'frio' | 'quente' | NULL (rotulado pelo experimento)
+    #   rodada     -> número da rodada do experimento | NULL
     cur.execute("""
         CREATE TABLE IF NOT EXISTS log_buscas_lote (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -74,6 +81,20 @@ def init_db():
             registrado_em TEXT NOT NULL
         )
     """)
+
+    # Migração: colunas de contexto em log_buscas_lote
+    colunas_lote = [
+        r["name"] for r in cur.execute("PRAGMA table_info(log_buscas_lote)")
+    ]
+    for nome, tipo in (
+        ("cache_hits", "INTEGER"),
+        ("erros", "INTEGER"),
+        ("cenario", "TEXT"),
+        ("rodada", "INTEGER"),
+    ):
+        if nome not in colunas_lote:
+            cur.execute(f"ALTER TABLE log_buscas_lote ADD COLUMN {nome} {tipo}")
+
     # =========================
     # Aportes em Renda Fixa (CDI/Selic)
     # =========================
@@ -120,9 +141,12 @@ def init_db():
     # =========================
     # Registra cada consulta feita via services.cache.buscar_ativo e
     # services.indexadores.rendimento_desde, seja ela servida pelo cache
-    # local ou pela API externa (brapi.dev ou BCB/SGS). Usado para
+    # local ou por fonte externa (cotações ou BCB/SGS). Usado para
     # calcular taxa de cache hit, tempo médio de resposta e taxa de erro —
     # métricas de desempenho e qualidade de dados apresentadas no TCC.
+    #
+    # Categoria (derivada, não armazenada): tickers entre colchetes
+    # (ex.: "[CDI]", "[SELIC]") são renda fixa; os demais são ações.
     cur.execute("""
         CREATE TABLE IF NOT EXISTS log_requisicoes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

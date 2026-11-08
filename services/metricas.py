@@ -2,22 +2,53 @@ from datetime import datetime, timedelta
 
 from db.database import get_connection
 
+# =========================
+# Categorias de requisição
+# =========================
+# CDI/Selic são tratados como renda fixa e gravados em log_requisicoes da
+# mesma forma que as ações; o ticker vem entre colchetes (ex.: "[CDI]").
+# Ações e renda fixa têm fontes externas com perfis de latência distintos,
+# por isso as métricas são calculadas por categoria.
+#
+#   "acao"       -> cotações de ações (fontes externas de mercado)
+#   "renda_fixa" -> indexadores CDI/Selic (série do Banco Central)
+#   None         -> todas as categorias
 
-def resumo_metricas(dias=7):
+CATEGORIAS = {
+    "acao": "Ações",
+    "renda_fixa": "Renda fixa (CDI/Selic)",
+}
+
+
+def _filtro_categoria(categoria):
+    """Trecho SQL (iniciando com AND) que restringe log_requisicoes à categoria."""
+    if categoria == "acao":
+        return " AND ticker NOT LIKE '[%'"
+    if categoria == "renda_fixa":
+        return " AND ticker LIKE '[%'"
+    return ""
+
+
+def resumo_metricas(dias=7, categoria="acao"):
     """
     Calcula o resumo das métricas técnicas coletadas em log_requisicoes
-    nos últimos `dias` dias.
+    nos últimos `dias` dias, para a `categoria` informada.
 
     Inclui:
     - volume total de requisições;
     - taxa de cache hit;
-    - tempo médio da API;
+    - tempo médio da fonte externa;
     - tempo médio do cache;
     - redução percentual de tempo;
-    - chamadas evitadas na API;
+    - chamadas evitadas na fonte externa;
     - tempo total estimado economizado;
     - taxa e quantidade de erros;
     - linhas detalhadas do log.
+
+    Tempos de cache iguais ou menores que zero são fisicamente impossíveis
+    e decorrem de uma versão antiga da medição; esses registros continuam
+    contando como cache hit, mas ficam fora do tempo médio do cache
+    (reportados em `cache_descartados`).
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -25,10 +56,11 @@ def resumo_metricas(dias=7):
     desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
     cur.execute(
-        """
+        f"""
         SELECT *
         FROM log_requisicoes
         WHERE registrado_em >= ?
+        {_filtro_categoria(categoria)}
         ORDER BY registrado_em DESC
         """,
         (desde,),
@@ -55,6 +87,7 @@ def resumo_metricas(dias=7):
             "tempo_total_economizado_ms": 0.0,
             "taxa_erro": 0.0,
             "total_erros": 0,
+            "cache_descartados": 0,
             "linhas": [],
         }
 
@@ -66,8 +99,10 @@ def resumo_metricas(dias=7):
         r for r in rows if r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
     ]
 
+    cache_validos = [r for r in cache_hits if r["tempo_resposta_ms"] > 0]
+
     # ---------------------------------------------------------
-    # Chamadas reais à API
+    # Chamadas reais à fonte externa
     # ---------------------------------------------------------
 
     chamadas_api = [
@@ -89,13 +124,13 @@ def resumo_metricas(dias=7):
     # ---------------------------------------------------------
 
     tempo_medio_cache_ms = (
-        sum(r["tempo_resposta_ms"] for r in cache_hits) / len(cache_hits)
-        if cache_hits
+        sum(r["tempo_resposta_ms"] for r in cache_validos) / len(cache_validos)
+        if cache_validos
         else 0.0
     )
 
     # ---------------------------------------------------------
-    # Tempo médio da API
+    # Tempo médio da fonte externa
     # ---------------------------------------------------------
 
     tempo_medio_api_ms = (
@@ -108,8 +143,8 @@ def resumo_metricas(dias=7):
     # Redução percentual proporcionada pelo cache
     #
     # Exemplo:
-    # API   = 500 ms
-    # Cache = 5 ms
+    # Fonte externa = 500 ms
+    # Cache         = 5 ms
     #
     # redução = 99%
     # ---------------------------------------------------------
@@ -136,7 +171,7 @@ def resumo_metricas(dias=7):
     # Estimativa:
     #
     # nº de cache hits ×
-    # (tempo médio API - tempo médio cache)
+    # (tempo médio fonte externa - tempo médio cache)
     # ---------------------------------------------------------
 
     ganho_por_chamada_ms = max(
@@ -161,19 +196,20 @@ def resumo_metricas(dias=7):
         "tempo_total_economizado_ms": tempo_total_economizado_ms,
         "taxa_erro": (len(erros) / total) * 100,
         "total_erros": len(erros),
+        "cache_descartados": len(cache_hits) - len(cache_validos),
         "linhas": rows,
     }
 
 
-def comparacao_cache_api(dias=7):
+def comparacao_cache_api(dias=7, categoria="acao"):
     """
     Retorna exclusivamente as métricas relacionadas à comparação
-    entre cache e API.
+    entre cache e fonte externa.
 
     Reutiliza resumo_metricas() para evitar duplicação de regras
     de negócio e cálculos.
     """
-    resumo = resumo_metricas(dias)
+    resumo = resumo_metricas(dias, categoria)
 
     return {
         "total": resumo["total"],
@@ -191,7 +227,7 @@ def comparacao_cache_api(dias=7):
     }
 
 
-def erros_por_ticker(dias=7):
+def erros_por_ticker(dias=7, categoria="acao"):
     """
     Retorna a quantidade de erros agrupada por ticker
     dentro do período informado.
@@ -202,11 +238,12 @@ def erros_por_ticker(dias=7):
     desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
     cur.execute(
-        """
+        f"""
         SELECT ticker, COUNT(*) AS total_erros
         FROM log_requisicoes
         WHERE registrado_em >= ?
           AND sucesso = 0
+          {_filtro_categoria(categoria)}
         GROUP BY ticker
         ORDER BY total_erros DESC
         """,
@@ -219,12 +256,12 @@ def erros_por_ticker(dias=7):
     return rows
 
 
-def percentis_latencia_api(dias=7):
+def percentis_latencia_api(dias=7, categoria="acao"):
     """
     Calcula percentis de latência (p50/p90/p95/p99), mínimo e máximo das
-    chamadas reais à API no período. Percentis dão uma leitura mais
-    robusta do desempenho do que a média isolada, já que expõem picos de
-    latência (cauda da distribuição) que a média pode mascarar.
+    chamadas reais à fonte externa no período. Percentis dão uma leitura
+    mais robusta do desempenho do que a média isolada, já que expõem picos
+    de latência (cauda da distribuição) que a média pode mascarar.
     """
     conn = get_connection()
     cur = conn.cursor()
@@ -232,10 +269,11 @@ def percentis_latencia_api(dias=7):
     desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
     cur.execute(
-        """
+        f"""
         SELECT tempo_resposta_ms FROM log_requisicoes
         WHERE registrado_em >= ? AND veio_do_cache = 0 AND sucesso = 1
             AND tempo_resposta_ms IS NOT NULL
+            {_filtro_categoria(categoria)}
         """,
         (desde,),
     )
@@ -277,21 +315,30 @@ def percentis_latencia_api(dias=7):
     }
 
 
-def comparacao_paralelo_sequencial(dias=7):
+def comparacao_paralelo_sequencial(dias=7, apenas_comparaveis=True):
     """
     Compara o tempo total de busca em lote entre os modos paralelo e
     sequencial (services.cache.buscar_ativos_paralelo), agrupando por modo.
     Base do experimento comparativo de paralelismo do TCC.
+
+    Com `apenas_comparaveis=True`, só entram lotes com cache frio
+    (cache_hits = 0) e sem falhas (erros = 0): o tempo de um lote servido
+    pelo cache, ou inflado por falhas, não mede o ganho do paralelismo.
+    Lotes antigos, registrados antes dessas colunas existirem, têm valores
+    nulos e ficam de fora do filtro.
     """
     conn = get_connection()
     cur = conn.cursor()
 
     desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
+    filtro = " AND cache_hits = 0 AND erros = 0" if apenas_comparaveis else ""
+
     cur.execute(
-        """
+        f"""
         SELECT * FROM log_buscas_lote
         WHERE registrado_em >= ?
+        {filtro}
         ORDER BY registrado_em DESC
         """,
         (desde,),

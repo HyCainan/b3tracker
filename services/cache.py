@@ -1,4 +1,5 @@
 import json
+import os
 import time
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -6,6 +7,10 @@ import requests
 import threading
 import yfinance as yf
 from db.database import get_connection
+
+# Threads do modo paralelo: todos os núcleos lógicos disponíveis menos um
+# (deixa um livre para a interface e o restante do sistema).
+WORKERS_PADRAO = max(1, (os.cpu_count() or 2) - 1)
 
 # Limita requisições simultâneas ao Yahoo para evitar HTTP 429.
 _SEM_YFINANCE = threading.Semaphore(3)
@@ -222,32 +227,79 @@ def buscar_ativo(ticker, periodo, token, ttl_minutos=15):
     return None, False
 
 
-def _registrar_log_lote(modo, qtd_tickers, tempo_total_ms):
+def _registrar_log_lote(
+    modo,
+    qtd_tickers,
+    tempo_total_ms,
+    cache_hits=None,
+    erros=None,
+    cenario=None,
+    rodada=None,
+):
     """
     Registra uma chamada de busca em lote (paralela ou sequencial) para
     alimentar o comparativo de desempenho apresentado nas Métricas técnicas.
+
+    `cache_hits` e `erros` permitem filtrar depois apenas os lotes
+    comparáveis (cache frio e sem falhas). `cenario` e `rodada` são
+    preenchidos pelo experimento controlado (experimento.py).
     """
     conn = get_connection()
     cur = conn.cursor()
     cur.execute(
         """
-        INSERT INTO log_buscas_lote (modo, qtd_tickers, tempo_total_ms, registrado_em)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO log_buscas_lote
+            (modo, qtd_tickers, tempo_total_ms, registrado_em,
+             cache_hits, erros, cenario, rodada)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (modo, qtd_tickers, tempo_total_ms, datetime.utcnow().isoformat()),
+        (
+            modo,
+            qtd_tickers,
+            tempo_total_ms,
+            datetime.utcnow().isoformat(),
+            cache_hits,
+            erros,
+            cenario,
+            rodada,
+        ),
     )
     conn.commit()
     conn.close()
 
 
-def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True):
+def _contar_lote(respostas):
+    """
+    A partir das tuplas (ticker, stock, veio_do_cache, erro), devolve
+    (cache_hits, erros). Um ticker conta como erro se houve exceção ou
+    se terminou sem dados.
+    """
+    cache_hits = sum(1 for _, _, veio_do_cache, _ in respostas if veio_do_cache)
+    erros = sum(1 for _, stock, _, erro in respostas if erro or not stock)
+    return cache_hits, erros
+
+
+def buscar_ativos_paralelo(
+    tickers,
+    periodo,
+    token,
+    max_workers=None,
+    paralelo=True,
+    cenario=None,
+    rodada=None,
+):
     """
     Busca vários tickers de uma vez. Retorna uma lista de tuplas
     (ticker, stock, veio_do_cache, erro), na mesma ordem de `tickers`.
 
-    paralelo=True usa ThreadPoolExecutor (até `max_workers` threads);
+    paralelo=True usa ThreadPoolExecutor (até `max_workers` threads; padrão:
+    núcleos lógicos - 1, ver WORKERS_PADRAO);
     paralelo=False busca um por vez. Os dois modos registram o tempo total
-    em log_buscas_lote, para o comparativo de desempenho nas Métricas.
+    (e quantos tickers vieram do cache / terminaram em erro) em
+    log_buscas_lote, para o comparativo de desempenho nas Métricas.
+
+    `cenario` ('frio' | 'quente') e `rodada` são rótulos opcionais usados
+    pelo experimento controlado; o uso normal da aplicação não os informa.
     """
     if not tickers:
         return []
@@ -265,10 +317,15 @@ def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True
                 resultados_seq.append((ticker, None, False, str(e)))
 
         tempo_total_ms = (time.perf_counter() - t_inicio_lote) * 1000
-        _registrar_log_lote(modo, len(tickers), tempo_total_ms)
+        cache_hits, erros = _contar_lote(resultados_seq)
+        _registrar_log_lote(
+            modo, len(tickers), tempo_total_ms, cache_hits, erros, cenario, rodada
+        )
         return resultados_seq
 
     resultados = {}
+    if max_workers is None:
+        max_workers = WORKERS_PADRAO
     workers = max(1, min(max_workers, len(tickers)))
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
@@ -286,6 +343,11 @@ def buscar_ativos_paralelo(tickers, periodo, token, max_workers=8, paralelo=True
                 resultados[ticker] = (None, False, str(e))
 
     tempo_total_ms = (time.perf_counter() - t_inicio_lote) * 1000
-    _registrar_log_lote(modo, len(tickers), tempo_total_ms)
 
-    return [(ticker, *resultados[ticker]) for ticker in tickers]
+    saida = [(ticker, *resultados[ticker]) for ticker in tickers]
+    cache_hits, erros = _contar_lote(saida)
+    _registrar_log_lote(
+        modo, len(tickers), tempo_total_ms, cache_hits, erros, cenario, rodada
+    )
+
+    return saida

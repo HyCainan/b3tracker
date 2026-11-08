@@ -1,0 +1,52 @@
+== Volume ==
+log_requisicoes: 1665 linhas
+log_buscas_lote: 194 linhas
+
+== Período coberto (UTC) ==
+log_requisicoes: 2026-09-01T23:37:23.905848  ->  2026-10-29T18:49:23.388092+00:00
+log_buscas_lote: 2026-09-08T19:00:16.452854  ->  2026-10-29T18:49:21.761696
+
+== log_requisicoes por categoria / fonte / origem / sucesso ==
+{'categoria': 'acao', 'fonte': 'brapi', 'origem': 'api', 'sucesso': 0, 'n': 243}
+{'categoria': 'acao', 'fonte': 'brapi', 'origem': 'api', 'sucesso': 1, 'n': 387}
+{'categoria': 'acao', 'fonte': 'brapi', 'origem': 'cache', 'sucesso': 1, 'n': 766}
+{'categoria': 'acao', 'fonte': 'yfinance', 'origem': 'api', 'sucesso': 1, 'n': 63}
+{'categoria': 'acao', 'fonte': 'yfinance', 'origem': 'cache', 'sucesso': 1, 'n': 16}
+{'categoria': 'renda_fixa', 'fonte': 'bcb', 'origem': 'api', 'sucesso': 0, 'n': 3}
+{'categoria': 'renda_fixa', 'fonte': 'bcb', 'origem': 'api', 'sucesso': 1, 'n': 33}
+{'categoria': 'renda_fixa', 'fonte': 'bcb', 'origem': 'cache', 'sucesso': 1, 'n': 154}
+
+== log_requisicoes por período (somente ações) ==
+{'periodo': '1mo', 'n': 680}
+{'periodo': '3mo', 'n': 446}
+{'periodo': '1y', 'n': 269}
+{'periodo': '6mo', 'n': 80}
+
+== log_buscas_lote por modo e nº de tickers ==
+{'modo': 'paralelo', 'qtd_tickers': 1, 'n': 68, 'media_ms': 234.1}
+{'modo': 'paralelo', 'qtd_tickers': 2, 'n': 28, 'media_ms': 1502.9}
+{'modo': 'paralelo', 'qtd_tickers': 3, 'n': 25, 'media_ms': 1344.5}
+{'modo': 'paralelo', 'qtd_tickers': 4, 'n': 4, 'media_ms': 423.6}
+{'modo': 'paralelo', 'qtd_tickers': 5, 'n': 11, 'media_ms': 827.0}
+{'modo': 'paralelo', 'qtd_tickers': 6, 'n': 3, 'media_ms': 265.4}
+{'modo': 'paralelo', 'qtd_tickers': 7, 'n': 3, 'media_ms': 266.9}
+{'modo': 'paralelo', 'qtd_tickers': 8, 'n': 3, 'media_ms': 288.5}
+{'modo': 'paralelo', 'qtd_tickers': 9, 'n': 14, 'media_ms': 1757.5}
+{'modo': 'paralelo', 'qtd_tickers': 15, 'n': 9, 'media_ms': 4015.1}
+{'modo': 'paralelo', 'qtd_tickers': 24, 'n': 1, 'media_ms': 1581.1}
+{'modo': 'paralelo', 'qtd_tickers': 25, 'n': 11, 'media_ms': 6619.5}
+{'modo': 'sequencial', 'qtd_tickers': 1, 'n': 4, 'media_ms': 603.4}
+{'modo': 'sequencial', 'qtd_tickers': 2, 'n': 1, 'media_ms': 101.1}
+{'modo': 'sequencial', 'qtd_tickers': 15, 'n': 7, 'media_ms': 7639.2}
+{'modo': 'sequencial', 'qtd_tickers': 25, 'n': 2, 'media_ms': 22746.0}
+
+== Ambiente de execução ==
+SO: Windows-11-10.0.22631-SP0
+Processador: Intel64 Family 6 Model 142 Stepping 12, GenuineIntel
+Núcleos lógicos: 8
+Python: 3.13.5
+streamlit: 1.56.0
+requests: 2.32.5
+yfinance: 1.7.0
+plotly: 6.7.0
+bcrypt: 5.0.0
