@@ -15,7 +15,7 @@ def _dinheiro(valor):
 
 
 def render_recomendacoes():
-    st.title("💡 Recomendações e análise da carteira")
+    st.title(" Recomendações e análise da carteira")
     st.caption(
         "Análise informativa baseada na composição da carteira, no histórico de preços "
         "e em regras configuráveis. Indicadores técnicos descrevem o passado e não "

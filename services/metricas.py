@@ -1,84 +1,141 @@
-from datetime import datetime, timedelta
+"""
+Métricas técnicas do B3Tracker (base do Capítulo 6 do TCC).
+
+Decisões metodológicas aplicadas aqui:
+- Renda fixa (CDI/Selic, ticker entre colchetes, fonte bcb) é separada das
+  ações: por padrão as métricas consideram só `categoria="acoes"`.
+- brapi e yfinance são tratadas como "fonte externa" (sem distinção nas
+  tabelas de métricas); o detalhe de cada fonte fica na descrição do sistema.
+- A janela de análise pode ser por `dias` ou por `data_inicio`/`data_fim`,
+  para isolar regimes de coleta distintos (ex.: antes/depois do bloqueio de
+  ranges da brapi em 29/10/2026).
+
+Uso para exportar os dados do Cap. 6 (na raiz do projeto):
+    python -m services.metricas --inicio 2026-10-29 --pasta exports
+"""
+
+import csv
+import os
+from datetime import date, datetime, timedelta
 
 from db.database import get_connection
 
+CATEGORIAS = ("acoes", "renda_fixa", "todas")
+
+# Abaixo disso, p95/p99 são interpolados de pouquíssimas amostras.
+AMOSTRA_MINIMA_PERCENTIS = 30
+
+
 # =========================
-# Categorias de requisição
+# Helpers internos
 # =========================
-# CDI/Selic são tratados como renda fixa e gravados em log_requisicoes da
-# mesma forma que as ações; o ticker vem entre colchetes (ex.: "[CDI]").
-# Ações e renda fixa têm fontes externas com perfis de latência distintos,
-# por isso as métricas são calculadas por categoria.
-#
-#   "acao"       -> cotações de ações (fontes externas de mercado)
-#   "renda_fixa" -> indexadores CDI/Selic (série do Banco Central)
-#   None         -> todas as categorias
-
-CATEGORIAS = {
-    "acao": "Ações",
-    "renda_fixa": "Renda fixa (CDI/Selic)",
-}
 
 
-def _filtro_categoria(categoria):
-    """Trecho SQL (iniciando com AND) que restringe log_requisicoes à categoria."""
-    if categoria == "acao":
-        return " AND ticker NOT LIKE '[%'"
-    if categoria == "renda_fixa":
-        return " AND ticker LIKE '[%'"
-    return ""
-
-
-def resumo_metricas(dias=7, categoria="acao"):
+def _normalizar_data(valor, fim=False):
     """
-    Calcula o resumo das métricas técnicas coletadas em log_requisicoes
-    nos últimos `dias` dias, para a `categoria` informada.
-
-    Inclui:
-    - volume total de requisições;
-    - taxa de cache hit;
-    - tempo médio da fonte externa;
-    - tempo médio do cache;
-    - redução percentual de tempo;
-    - chamadas evitadas na fonte externa;
-    - tempo total estimado economizado;
-    - taxa e quantidade de erros;
-    - linhas detalhadas do log.
-
-    Tempos de cache iguais ou menores que zero são fisicamente impossíveis
-    e decorrem de uma versão antiga da medição; esses registros continuam
-    contando como cache hit, mas ficam fora do tempo médio do cache
-    (reportados em `cache_descartados`).
+    Converte date/datetime/str ISO em string ISO. Para o limite final dado
+    só como data (sem hora), soma 1 dia: o intervalo é [inicio, fim) e o
+    dia informado entra por inteiro.
     """
+    if isinstance(valor, datetime):
+        dt, somente_data = valor, False
+    elif isinstance(valor, date):
+        dt, somente_data = datetime.combine(valor, datetime.min.time()), True
+    else:
+        texto = str(valor).strip()
+        dt, somente_data = datetime.fromisoformat(texto), len(texto) == 10
+
+    if fim and somente_data:
+        dt += timedelta(days=1)
+
+    return dt.isoformat()
+
+
+def _janela(dias, data_inicio, data_fim):
+    if data_inicio is not None:
+        desde = _normalizar_data(data_inicio)
+    else:
+        desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
+
+    ate = _normalizar_data(data_fim, fim=True) if data_fim is not None else None
+    return desde, ate
+
+
+def _where(desde, ate, categoria=None):
+    cond = ["registrado_em >= ?"]
+    params = [desde]
+
+    if ate:
+        cond.append("registrado_em < ?")
+        params.append(ate)
+
+    if categoria is not None:
+        if categoria not in CATEGORIAS:
+            raise ValueError(f"categoria deve ser uma de {CATEGORIAS}")
+        # Renda fixa é gravada com o indexador entre colchetes (ex.: "[CDI]").
+        if categoria == "acoes":
+            cond.append("ticker NOT LIKE '[%'")
+        elif categoria == "renda_fixa":
+            cond.append("ticker LIKE '[%'")
+
+    return " AND ".join(cond), params
+
+
+def _buscar_linhas(dias, categoria, data_inicio, data_fim):
+    desde, ate = _janela(dias, data_inicio, data_fim)
+    where, params = _where(desde, ate, categoria)
+
     conn = get_connection()
     cur = conn.cursor()
-
-    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
-
     cur.execute(
-        f"""
-        SELECT *
-        FROM log_requisicoes
-        WHERE registrado_em >= ?
-        {_filtro_categoria(categoria)}
-        ORDER BY registrado_em DESC
-        """,
-        (desde,),
+        f"SELECT * FROM log_requisicoes WHERE {where} ORDER BY registrado_em DESC",
+        params,
     )
-
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
-    total = len(rows)
+    for r in rows:
+        eh_rf = str(r["ticker"]).startswith("[")
+        r["categoria"] = "renda_fixa" if eh_rf else "acoes"
+        r["grupo_fonte"] = "indexador (BCB)" if eh_rf else "fonte externa"
 
-    # ---------------------------------------------------------
-    # Sem dados
-    # ---------------------------------------------------------
+    return rows
+
+
+def _percentil(dados, p):
+    """Percentil por interpolação linear entre as duas amostras mais próximas."""
+    if len(dados) == 1:
+        return dados[0]
+    k = (len(dados) - 1) * (p / 100)
+    piso = int(k)
+    teto = min(piso + 1, len(dados) - 1)
+    if piso == teto:
+        return dados[piso]
+    return dados[piso] + (dados[teto] - dados[piso]) * (k - piso)
+
+
+# =========================
+# Resumo geral
+# =========================
+
+
+def resumo_metricas(dias=7, categoria="acoes", data_inicio=None, data_fim=None):
+    """
+    Resumo das métricas de `log_requisicoes` na janela escolhida.
+
+    Cada linha do log é uma TENTATIVA. Quando a brapi falha e o yfinance
+    atende, são duas linhas (uma falha, uma sucesso): `taxa_erro` mede erro
+    por tentativa, não requisições que terminaram sem dados para o usuário.
+    """
+    rows = _buscar_linhas(dias, categoria, data_inicio, data_fim)
+    total = len(rows)
 
     if total == 0:
         return {
+            "categoria": categoria,
             "total": 0,
             "cache_hits": 0,
+            "chamadas_api": 0,
             "taxa_cache_hit": 0.0,
             "tempo_medio_cache_ms": 0.0,
             "tempo_medio_api_ms": 0.0,
@@ -87,23 +144,12 @@ def resumo_metricas(dias=7, categoria="acao"):
             "tempo_total_economizado_ms": 0.0,
             "taxa_erro": 0.0,
             "total_erros": 0,
-            "cache_descartados": 0,
             "linhas": [],
         }
-
-    # ---------------------------------------------------------
-    # Cache
-    # ---------------------------------------------------------
 
     cache_hits = [
         r for r in rows if r["veio_do_cache"] and r["tempo_resposta_ms"] is not None
     ]
-
-    cache_validos = [r for r in cache_hits if r["tempo_resposta_ms"] > 0]
-
-    # ---------------------------------------------------------
-    # Chamadas reais à fonte externa
-    # ---------------------------------------------------------
 
     chamadas_api = [
         r
@@ -113,41 +159,19 @@ def resumo_metricas(dias=7, categoria="acao"):
         and r["tempo_resposta_ms"] is not None
     ]
 
-    # ---------------------------------------------------------
-    # Erros
-    # ---------------------------------------------------------
-
     erros = [r for r in rows if not r["sucesso"]]
 
-    # ---------------------------------------------------------
-    # Tempo médio do cache
-    # ---------------------------------------------------------
-
     tempo_medio_cache_ms = (
-        sum(r["tempo_resposta_ms"] for r in cache_validos) / len(cache_validos)
-        if cache_validos
+        sum(r["tempo_resposta_ms"] for r in cache_hits) / len(cache_hits)
+        if cache_hits
         else 0.0
     )
-
-    # ---------------------------------------------------------
-    # Tempo médio da fonte externa
-    # ---------------------------------------------------------
 
     tempo_medio_api_ms = (
         sum(r["tempo_resposta_ms"] for r in chamadas_api) / len(chamadas_api)
         if chamadas_api
         else 0.0
     )
-
-    # ---------------------------------------------------------
-    # Redução percentual proporcionada pelo cache
-    #
-    # Exemplo:
-    # Fonte externa = 500 ms
-    # Cache         = 5 ms
-    #
-    # redução = 99%
-    # ---------------------------------------------------------
 
     if tempo_medio_api_ms > 0:
         reducao_tempo_pct = (
@@ -156,38 +180,18 @@ def resumo_metricas(dias=7, categoria="acao"):
     else:
         reducao_tempo_pct = 0.0
 
-    # Evita percentual negativo em situações anômalas.
     reducao_tempo_pct = max(reducao_tempo_pct, 0.0)
-
-    # ---------------------------------------------------------
-    # Chamadas evitadas
-    # ---------------------------------------------------------
 
     chamadas_evitadas = len(cache_hits)
 
-    # ---------------------------------------------------------
-    # Tempo total estimado economizado
-    #
-    # Estimativa:
-    #
-    # nº de cache hits ×
-    # (tempo médio fonte externa - tempo médio cache)
-    # ---------------------------------------------------------
-
-    ganho_por_chamada_ms = max(
-        tempo_medio_api_ms - tempo_medio_cache_ms,
-        0.0,
-    )
-
+    ganho_por_chamada_ms = max(tempo_medio_api_ms - tempo_medio_cache_ms, 0.0)
     tempo_total_economizado_ms = chamadas_evitadas * ganho_por_chamada_ms
 
-    # ---------------------------------------------------------
-    # Resultado
-    # ---------------------------------------------------------
-
     return {
+        "categoria": categoria,
         "total": total,
         "cache_hits": len(cache_hits),
+        "chamadas_api": len(chamadas_api),
         "taxa_cache_hit": (len(cache_hits) / total) * 100,
         "tempo_medio_cache_ms": tempo_medio_cache_ms,
         "tempo_medio_api_ms": tempo_medio_api_ms,
@@ -196,25 +200,18 @@ def resumo_metricas(dias=7, categoria="acao"):
         "tempo_total_economizado_ms": tempo_total_economizado_ms,
         "taxa_erro": (len(erros) / total) * 100,
         "total_erros": len(erros),
-        "cache_descartados": len(cache_hits) - len(cache_validos),
         "linhas": rows,
     }
 
 
-def comparacao_cache_api(dias=7, categoria="acao"):
-    """
-    Retorna exclusivamente as métricas relacionadas à comparação
-    entre cache e fonte externa.
-
-    Reutiliza resumo_metricas() para evitar duplicação de regras
-    de negócio e cálculos.
-    """
-    resumo = resumo_metricas(dias, categoria)
+def comparacao_cache_api(dias=7, categoria="acoes", data_inicio=None, data_fim=None):
+    """Métricas de cache vs. fonte externa (reaproveita resumo_metricas)."""
+    resumo = resumo_metricas(dias, categoria, data_inicio, data_fim)
 
     return {
         "total": resumo["total"],
         "cache_hits": resumo["cache_hits"],
-        "chamadas_api": resumo["total"] - resumo["cache_hits"],
+        "chamadas_api": resumo["chamadas_api"],
         "tempo_medio_cache_ms": resumo["tempo_medio_cache_ms"],
         "tempo_medio_api_ms": resumo["tempo_medio_api_ms"],
         "fator_aceleracao": (
@@ -222,67 +219,60 @@ def comparacao_cache_api(dias=7, categoria="acao"):
             if resumo["tempo_medio_cache_ms"] > 0
             else 0.0
         ),
-        "tempo_economizado_estimado_ms": (resumo["tempo_total_economizado_ms"]),
-        "chamadas_evitadas_pct": (resumo["taxa_cache_hit"]),
+        "tempo_economizado_estimado_ms": resumo["tempo_total_economizado_ms"],
+        "chamadas_evitadas_pct": resumo["taxa_cache_hit"],
     }
 
 
-def erros_por_ticker(dias=7, categoria="acao"):
-    """
-    Retorna a quantidade de erros agrupada por ticker
-    dentro do período informado.
-    """
+def erros_por_ticker(dias=7, categoria="acoes", data_inicio=None, data_fim=None):
+    """Quantidade de tentativas com erro por ticker na janela."""
+    desde, ate = _janela(dias, data_inicio, data_fim)
+    where, params = _where(desde, ate, categoria)
+
     conn = get_connection()
     cur = conn.cursor()
-
-    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
-
     cur.execute(
         f"""
         SELECT ticker, COUNT(*) AS total_erros
         FROM log_requisicoes
-        WHERE registrado_em >= ?
-          AND sucesso = 0
-          {_filtro_categoria(categoria)}
+        WHERE {where} AND sucesso = 0
         GROUP BY ticker
         ORDER BY total_erros DESC
         """,
-        (desde,),
+        params,
     )
-
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
 
     return rows
 
 
-def percentis_latencia_api(dias=7, categoria="acao"):
-    """
-    Calcula percentis de latência (p50/p90/p95/p99), mínimo e máximo das
-    chamadas reais à fonte externa no período. Percentis dão uma leitura
-    mais robusta do desempenho do que a média isolada, já que expõem picos
-    de latência (cauda da distribuição) que a média pode mascarar.
-    """
-    conn = get_connection()
-    cur = conn.cursor()
+# =========================
+# Percentis de latência
+# =========================
 
-    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
 
-    cur.execute(
-        f"""
-        SELECT tempo_resposta_ms FROM log_requisicoes
-        WHERE registrado_em >= ? AND veio_do_cache = 0 AND sucesso = 1
-            AND tempo_resposta_ms IS NOT NULL
-            {_filtro_categoria(categoria)}
-        """,
-        (desde,),
+def percentis_latencia_api(dias=7, categoria="acoes", data_inicio=None, data_fim=None):
+    """
+    Percentis (p50/p90/p95/p99), mínimo e máximo das chamadas reais à fonte
+    externa (sem cache, com sucesso). `amostra_pequena` sinaliza N abaixo de
+    AMOSTRA_MINIMA_PERCENTIS: nesse caso p95/p99 são interpolados de poucas
+    amostras e devem ser lidos com cautela.
+    """
+    rows = _buscar_linhas(dias, categoria, data_inicio, data_fim)
+
+    tempos = sorted(
+        r["tempo_resposta_ms"]
+        for r in rows
+        if not r["veio_do_cache"]
+        and r["sucesso"]
+        and r["tempo_resposta_ms"] is not None
     )
-    tempos = sorted(r["tempo_resposta_ms"] for r in cur.fetchall())
-    conn.close()
 
     if not tempos:
         return {
             "amostras": 0,
+            "amostra_pequena": True,
             "min_ms": 0.0,
             "p50_ms": 0.0,
             "p90_ms": 0.0,
@@ -292,19 +282,9 @@ def percentis_latencia_api(dias=7, categoria="acao"):
             "tempos": [],
         }
 
-    def _percentil(dados, p):
-        """Percentil por interpolação linear entre as duas amostras mais próximas."""
-        if len(dados) == 1:
-            return dados[0]
-        k = (len(dados) - 1) * (p / 100)
-        piso = int(k)
-        teto = min(piso + 1, len(dados) - 1)
-        if piso == teto:
-            return dados[piso]
-        return dados[piso] + (dados[teto] - dados[piso]) * (k - piso)
-
     return {
         "amostras": len(tempos),
+        "amostra_pequena": len(tempos) < AMOSTRA_MINIMA_PERCENTIS,
         "min_ms": tempos[0],
         "p50_ms": _percentil(tempos, 50),
         "p90_ms": _percentil(tempos, 90),
@@ -315,36 +295,41 @@ def percentis_latencia_api(dias=7, categoria="acao"):
     }
 
 
-def comparacao_paralelo_sequencial(dias=7, apenas_comparaveis=True):
-    """
-    Compara o tempo total de busca em lote entre os modos paralelo e
-    sequencial (services.cache.buscar_ativos_paralelo), agrupando por modo.
-    Base do experimento comparativo de paralelismo do TCC.
+# =========================
+# Paralelo vs. sequencial
+# =========================
 
-    Com `apenas_comparaveis=True`, só entram lotes com cache frio
-    (cache_hits = 0) e sem falhas (erros = 0): o tempo de um lote servido
-    pelo cache, ou inflado por falhas, não mede o ganho do paralelismo.
-    Lotes antigos, registrados antes dessas colunas existirem, têm valores
-    nulos e ficam de fora do filtro.
-    """
+
+def _buscar_lotes(dias, data_inicio, data_fim):
+    desde, ate = _janela(dias, data_inicio, data_fim)
+    where, params = _where(desde, ate)
+
     conn = get_connection()
     cur = conn.cursor()
-
-    desde = (datetime.utcnow() - timedelta(days=dias)).isoformat()
-
-    filtro = " AND cache_hits = 0 AND erros = 0" if apenas_comparaveis else ""
-
     cur.execute(
-        f"""
-        SELECT * FROM log_buscas_lote
-        WHERE registrado_em >= ?
-        {filtro}
-        ORDER BY registrado_em DESC
-        """,
-        (desde,),
+        f"SELECT * FROM log_buscas_lote WHERE {where} ORDER BY registrado_em DESC",
+        params,
     )
     rows = [dict(r) for r in cur.fetchall()]
     conn.close()
+    return rows
+
+
+def comparacao_paralelo_sequencial(
+    dias=7, data_inicio=None, data_fim=None, qtd_tickers=None
+):
+    """
+    Compara o tempo total de busca em lote entre os modos paralelo e
+    sequencial. `qtd_tickers` restringe a comparação a lotes do mesmo
+    tamanho, o que evita comparar lotes de 2 ativos com lotes de 8.
+
+    Atenção: o log de lote não registra quantos ativos vieram do cache, então
+    a comparação só é limpa se os dois modos forem rodados com cache frio.
+    """
+    rows = _buscar_lotes(dias, data_inicio, data_fim)
+
+    if qtd_tickers is not None:
+        rows = [r for r in rows if r["qtd_tickers"] == qtd_tickers]
 
     paralelas = [r for r in rows if r["modo"] == "paralelo"]
     sequenciais = [r for r in rows if r["modo"] == "sequencial"]
@@ -361,16 +346,81 @@ def comparacao_paralelo_sequencial(dias=7, apenas_comparaveis=True):
         else 0.0
     )
 
-    media_tickers_paralelo = _media(paralelas, "qtd_tickers")
-    media_tickers_sequencial = _media(sequenciais, "qtd_tickers")
-
     return {
         "total_paralelo": len(paralelas),
         "total_sequencial": len(sequenciais),
         "tempo_medio_paralelo_ms": tempo_medio_paralelo,
         "tempo_medio_sequencial_ms": tempo_medio_sequencial,
         "fator_speedup": fator_speedup,
-        "media_tickers_paralelo": media_tickers_paralelo,
-        "media_tickers_sequencial": media_tickers_sequencial,
+        "media_tickers_paralelo": _media(paralelas, "qtd_tickers"),
+        "media_tickers_sequencial": _media(sequenciais, "qtd_tickers"),
         "linhas": rows,
     }
+
+
+# =========================
+# Exportação para o Capítulo 6
+# =========================
+
+_COLUNAS_REQ = [
+    "id",
+    "ticker",
+    "categoria",
+    "periodo",
+    "veio_do_cache",
+    "sucesso",
+    "tempo_resposta_ms",
+    "erro",
+    "registrado_em",
+    "fonte",
+    "grupo_fonte",
+]
+
+_COLUNAS_LOTE = ["id", "modo", "qtd_tickers", "tempo_total_ms", "registrado_em"]
+
+
+def _gravar_csv(caminho, colunas, linhas):
+    with open(caminho, "w", newline="", encoding="utf-8-sig") as f:
+        w = csv.DictWriter(f, fieldnames=colunas, extrasaction="ignore")
+        w.writeheader()
+        w.writerows(linhas)
+
+
+def exportar_dados(pasta="exports", dias=3650, data_inicio=None, data_fim=None):
+    """
+    Exporta log_requisicoes (todas as categorias, com a coluna `categoria`
+    para filtrar depois) e log_buscas_lote em CSV, na janela escolhida.
+    Retorna os caminhos gerados.
+    """
+    os.makedirs(pasta, exist_ok=True)
+
+    requisicoes = _buscar_linhas(dias, "todas", data_inicio, data_fim)
+    lotes = _buscar_lotes(dias, data_inicio, data_fim)
+
+    caminho_req = os.path.join(pasta, "log_requisicoes.csv")
+    caminho_lote = os.path.join(pasta, "log_buscas_lote.csv")
+
+    _gravar_csv(caminho_req, _COLUNAS_REQ, requisicoes)
+    _gravar_csv(caminho_lote, _COLUNAS_LOTE, lotes)
+
+    return {
+        "requisicoes": caminho_req,
+        "qtd_requisicoes": len(requisicoes),
+        "lotes": caminho_lote,
+        "qtd_lotes": len(lotes),
+    }
+
+
+if __name__ == "__main__":
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Exporta os logs para o Cap. 6.")
+    parser.add_argument("--inicio", help="data inicial (AAAA-MM-DD)")
+    parser.add_argument("--fim", help="data final, inclusive (AAAA-MM-DD)")
+    parser.add_argument("--pasta", default="exports")
+    args = parser.parse_args()
+
+    resultado = exportar_dados(
+        pasta=args.pasta, data_inicio=args.inicio, data_fim=args.fim
+    )
+    print(resultado)
