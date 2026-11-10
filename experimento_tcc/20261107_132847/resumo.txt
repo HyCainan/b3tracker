@@ -1,0 +1,35 @@
+== Configuração ==
+rodadas: 11  período: 1mo  workers (paralelo): 7 de 8 núcleos lógicos  pausa: 2.0s
+tickers (25): PETR4, VALE3, MGLU3, ITUB4, BBDC4, ABEV3, WEGE3, RENT3, BBAS3, EGIE3, RADL3, SUZB3, RAIL3, TOTS3, HAPV3, B3SA3, BBSE3, EQTL3, ISAE4, VIVT3, EMBJ3, BPAC11, CPLE3, TAEE11, RDOR3
+
+== Tempo total do lote (ms), somente execuções válidas ==
+(frio = sem cache e sem erros; quente = 100% servido pelo cache)
+frio   paralelo   n=2  mediana=8738  média=8738  dp=613  mín=8305  máx=9172  (válidas 2 de 11)
+frio   sequencial n=11  mediana=25706  média=27553  dp=4324  mín=24607  máx=39760  (válidas 11 de 11)
+quente paralelo   n=2  mediana=1057  média=1057  dp=202  mín=914  máx=1200  (válidas 2 de 11)
+quente sequencial n=11  mediana=807  média=896  dp=409  mín=352  máx=1839  (válidas 11 de 11)
+
+== Lotes completos por modo (cache frio) ==
+paralelo   lotes sem erro: 2/11  tickers com erro (soma): 16
+sequencial lotes sem erro: 11/11  tickers com erro (soma): 0
+
+== Speedup pareado (sequencial / paralelo, cache frio) ==
+rodadas pareadas=2  mediana=3.09x  média=3.09x  mín=2.74x  máx=3.44x
+
+== Ganho do cache (frio / quente, pareado por rodada e modo) ==
+paralelo   pares=2  mediana=8.5x  média=8.5x
+sequencial pares=11  mediana=32.3x  média=36.6x
+
+== Execuções com erro ==
+10 de 44 execuções tiveram ao menos um ticker sem dados.
+
+== Ambiente de execução ==
+SO: Windows-11-10.0.22631-SP0
+Processador: Intel64 Family 6 Model 142 Stepping 12, GenuineIntel
+Núcleos lógicos: 8
+Python: 3.13.5
+streamlit: 1.56.0
+requests: 2.32.5
+yfinance: 1.7.0
+plotly: 6.7.0
+bcrypt: 5.0.0
